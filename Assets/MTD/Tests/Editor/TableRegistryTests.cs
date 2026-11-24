@@ -102,6 +102,53 @@ namespace MTD.Tests
             Assert.AreEqual(TableChange.Corrected, registry.Apply(SnapshotParser.Parse(repaired), 2));
         }
 
+        // A row MTD cannot read ("bad") is not drawn, but it still counts as a row when two lists are compared. When
+        // it was dropped, every result below it sat one place too high, and that reversed the answer both ways.
+        [Test]
+        public void NewResult_AboveARowMtdCannotRead_IsANewResult()
+        {
+            string[] before = { "bad", "24", "5" };
+            string[] after = { "17", "bad", "24", "5" };
+
+            Assert.AreEqual(TableChange.NewResult, ChangeBetween(gameA, before, gameB, after), "The reported case: a new spin with a new game ID.");
+            Assert.AreEqual(TableChange.NewResult, ChangeBetween(gameA, before, gameA, after));
+            Assert.AreEqual(TableChange.NewResult, ChangeBetween(Guid.Empty, before, Guid.Empty, after));
+
+            // The same spin on a list that is at its size limit, so the oldest result drops off the end.
+            Assert.AreEqual(TableChange.NewResult, ChangeBetween(gameA, before, gameB, new[] { "17", "bad", "24" }));
+        }
+
+        [Test]
+        public void NewResult_AboveAnUnreadableHistoryRow_IsANewResult()
+        {
+            Assert.AreEqual(TableChange.NewResult, ChangeBetween(gameA, new[] { "7", "bad", "11" }, gameB, new[] { "9", "7", "bad", "11" }));
+            Assert.AreEqual(TableChange.NewResult, ChangeBetween(gameA, new[] { "7", "bad", "11" }, gameB, new[] { "7", "7", "bad", "11" }), "A repeat of the number on top.");
+        }
+
+        [Test]
+        public void UnreadableHistoryRow_Repaired_IsACorrection()
+        {
+            string[] before = { "7", "bad", "11" };
+            string[] after = { "7", "7", "11" };
+
+            Assert.AreEqual(TableChange.Corrected, ChangeBetween(gameA, before, gameA, after), "The reported case: repaired in the same round.");
+            Assert.AreEqual(TableChange.Corrected, ChangeBetween(gameA, before, gameB, after));
+            Assert.AreEqual(TableChange.Corrected, ChangeBetween(Guid.Empty, before, Guid.Empty, after));
+        }
+
+        [Test]
+        public void HistoryRow_BecomingUnreadable_IsACorrection()
+        {
+            Assert.AreEqual(TableChange.Corrected, ChangeBetween(gameA, new[] { "7", "7", "11" }, gameA, new[] { "7", "bad", "11" }));
+            Assert.AreEqual(TableChange.Corrected, ChangeBetween(gameA, new[] { "7", "bad", "11" }, gameA, new[] { "7", "worse", "11" }), "Still unreadable, but not the same row as before.");
+        }
+
+        [Test]
+        public void UnreadableHistoryRow_SentAgainUnchanged_IsAHeartbeat()
+        {
+            Assert.AreEqual(TableChange.Heartbeat, ChangeBetween(new[] { "7", "bad", "11" }, new[] { "7", "bad", "11" }));
+        }
+
         [Test]
         public void FirstSnapshot_IsAdded()
         {

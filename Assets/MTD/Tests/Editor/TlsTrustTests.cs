@@ -15,6 +15,8 @@ namespace MTD.Tests
     //   self-signed.pem             a broker certificate nobody issued
     //   impostor-ca.pem             a different authority using the same name as test-ca
     //   forged-test-ca-issuer.pem   a certificate issued by the impostor, so it names test-ca as its issuer
+    //   expired-self-signed.pem     a broker certificate nobody issued, whose validity period ended in 2025
+    //   expired-issued-by-test-ca.pem   one that test-ca issued, for the same period
     public class TlsTrustTests
     {
         const SslPolicyErrors notTrustedByWindows = SslPolicyErrors.RemoteCertificateChainErrors;
@@ -52,6 +54,70 @@ namespace MTD.Tests
         bool Accepts(string certificate, SslPolicyErrors errors, out string problem, bool allowUntrusted = false)
         {
             return MtdTlsTrust.Accepts(Sample(certificate), errors, "localhost", allowUntrusted, folder, out problem);
+        }
+
+        // The same decision as it would be made at another moment, for certificates that have years left to run.
+        bool AcceptsAt(DateTime utcNow, string certificate, out string problem)
+        {
+            return MtdTlsTrust.Accepts(Sample(certificate), notTrustedByWindows, "localhost", false, folder, utcNow, out problem);
+        }
+
+        // The reported fault: a broker's own certificate, copied into the trusted folder, was accepted as soon as it
+        // was found there, before anything looked at its dates.
+        [Test]
+        public void BrokersOwnCertificateInTheTrustedFolder_IsRefused_OnceItHasExpired()
+        {
+            Trust("expired-self-signed.pem");
+
+            Assert.IsFalse(Accepts("expired-self-signed.pem", notTrustedByWindows, out string problem));
+            StringAssert.Contains("expired on", problem);
+            StringAssert.DoesNotContain("Put its issuer's certificate", problem, "Copying another file into the folder would not help.");
+        }
+
+        [Test]
+        public void BrokersOwnCertificateInTheTrustedFolder_IsAcceptedOnlyInsideItsValidityPeriod()
+        {
+            Trust("self-signed.pem");
+            DateTime validFrom = Sample("self-signed.pem").NotBefore.ToUniversalTime();
+            DateTime validTo = Sample("self-signed.pem").NotAfter.ToUniversalTime();
+
+            Assert.IsTrue(AcceptsAt(validFrom.AddSeconds(1), "self-signed.pem", out string problem), problem);
+            Assert.IsTrue(AcceptsAt(validTo.AddSeconds(-1), "self-signed.pem", out problem), problem);
+
+            Assert.IsFalse(AcceptsAt(validTo.AddSeconds(1), "self-signed.pem", out problem));
+            StringAssert.Contains("expired on", problem);
+
+            Assert.IsFalse(AcceptsAt(validFrom.AddSeconds(-1), "self-signed.pem", out problem));
+            StringAssert.Contains("not valid until", problem);
+        }
+
+        [Test]
+        public void CertificateIssuedByATrustedAuthority_IsRefused_OnceItHasExpired()
+        {
+            Trust("test-ca.pem");
+
+            Assert.IsFalse(Accepts("expired-issued-by-test-ca.pem", notTrustedByWindows, out string problem));
+            StringAssert.Contains("expired on", problem);
+
+            DateTime validTo = Sample("issued-by-test-ca.pem").NotAfter.ToUniversalTime();
+            Assert.IsFalse(AcceptsAt(validTo.AddSeconds(1), "issued-by-test-ca.pem", out problem));
+            StringAssert.Contains("expired on", problem);
+        }
+
+        // The authority's certificate runs out one second before the certificate it issued, which leaves a moment
+        // when only the authority is out of date.
+        [Test]
+        public void CertificateIssuedByAnAuthorityThatHasExpired_IsRefused_ThoughItsOwnDatesAreInOrder()
+        {
+            Trust("test-ca.pem");
+            DateTime authorityValidTo = Sample("test-ca.pem").NotAfter.ToUniversalTime();
+            DateTime certificateValidTo = Sample("issued-by-test-ca.pem").NotAfter.ToUniversalTime();
+            Assert.Greater(certificateValidTo, authorityValidTo, "The samples no longer leave a gap to test in.");
+            DateTime inTheGap = authorityValidTo.AddTicks((certificateValidTo - authorityValidTo).Ticks / 2);
+
+            Assert.IsTrue(AcceptsAt(authorityValidTo.AddSeconds(-1), "issued-by-test-ca.pem", out string problem), problem);
+            Assert.IsFalse(AcceptsAt(inTheGap, "issued-by-test-ca.pem", out problem));
+            StringAssert.Contains("not trusted", problem);
         }
 
         [Test]
@@ -127,6 +193,9 @@ namespace MTD.Tests
         public void AllowUntrustedCertificate_AcceptsAnything()
         {
             Assert.IsTrue(Accepts("forged-test-ca-issuer.pem", notTrustedByWindows | SslPolicyErrors.RemoteCertificateNameMismatch, out string problem, allowUntrusted: true));
+            Assert.IsNull(problem);
+
+            Assert.IsTrue(Accepts("expired-self-signed.pem", notTrustedByWindows, out problem, allowUntrusted: true));
             Assert.IsNull(problem);
         }
 

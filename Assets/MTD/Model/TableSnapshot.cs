@@ -12,6 +12,7 @@ namespace MTD
     public abstract class TableSnapshot
     {
         static readonly IReadOnlyDictionary<string, string> noStatistics = new Dictionary<string, string>();
+        static readonly string[] noKeys = new string[0];
 
         string displaySignature;
 
@@ -38,17 +39,16 @@ namespace MTD
 
         public bool CurrentResultUnreadable => UnreadableCurrentResult != null;
 
-        // One text key per result, newest first. Lets the registry tell a new result from a correction without
-        // knowing the game. An unreadable current result keeps its place, under a key of its own.
-        public abstract IReadOnlyList<string> ResultKeys { get; }
+        // One text key per result row DDS sent, newest first, whether or not MTD could read the row. The registry
+        // compares these to tell a new result from a correction without knowing the game. A row MTD cannot read
+        // keeps its place here under a key of its own, even though History leaves it out: see
+        // SnapshotParser.ReadResults.
+        public IReadOnlyList<string> ResultKeys { get; internal set; } = noKeys;
 
-        protected IReadOnlyList<string> BuildResultKeys(string currentKey, IEnumerable<string> historyKeys)
+        // The key of a row that could not be read. No readable result's key starts with a question mark.
+        internal static string UnreadableKey(string rawText)
         {
-            List<string> keys = new List<string>();
-            if (CurrentResultUnreadable) keys.Add("?" + UnreadableCurrentResult);
-            else if (currentKey != null) keys.Add(currentKey);
-            keys.AddRange(historyKeys);
-            return keys;
+            return "?" + rawText;
         }
 
         // A statistic count, or the fallback when DDS did not send that key or it is not a number.
@@ -93,17 +93,13 @@ namespace MTD
         static readonly RouletteResult[] noResults = new RouletteResult[0];
         static readonly RoulettePocket[] noPockets = new RoulettePocket[0];
 
-        IReadOnlyList<string> resultKeys;
-
         public RouletteVariant Variant { get; internal set; }
         public RouletteResult? Current { get; internal set; } // The latest result. Null when there is none, or it could not be read.
-        public IReadOnlyList<RouletteResult> History { get; internal set; } = noResults; // The results before it, newest first.
+        public IReadOnlyList<RouletteResult> History { get; internal set; } = noResults; // The readable results before it, newest first.
         public IReadOnlyList<RoulettePocket> HotNumbers { get; internal set; } = noPockets; // Hottest first.
         public IReadOnlyList<RoulettePocket> ColdNumbers { get; internal set; } = noPockets; // Coldest first.
 
-        public override IReadOnlyList<string> ResultKeys => resultKeys ??= BuildResultKeys(Current.HasValue ? Key(Current.Value) : null, History.Select(Key));
-
-        static string Key(RouletteResult result)
+        internal static string KeyOf(RouletteResult result)
         {
             return result.HasMultiplier
                 ? $"{result.Pocket.Label}x{result.Multiplier}{(result.MultiplierColour.HasValue ? MtdColour.ToHex(result.MultiplierColour.Value) : "")}"
@@ -122,14 +118,15 @@ namespace MTD
         static readonly SicBoResult[] noResults = new SicBoResult[0];
         static readonly int[] noTotals = new int[0];
 
-        IReadOnlyList<string> resultKeys;
-
         public SicBoResult? Current { get; internal set; } // The latest result. Null when there is none, or it could not be read.
-        public IReadOnlyList<SicBoResult> History { get; internal set; } = noResults; // The results before it, newest first.
+        public IReadOnlyList<SicBoResult> History { get; internal set; } = noResults; // The readable results before it, newest first.
         public IReadOnlyList<int> HotTotals { get; internal set; } = noTotals; // Hottest first.
         public IReadOnlyList<int> ColdTotals { get; internal set; } = noTotals; // Coldest first.
 
-        public override IReadOnlyList<string> ResultKeys => resultKeys ??= BuildResultKeys(Current?.ToString(), History.Select(result => result.ToString()));
+        internal static string KeyOf(SicBoResult result)
+        {
+            return result.ToString();
+        }
 
         protected override void AppendExtraSignature(StringBuilder builder)
         {
@@ -141,8 +138,5 @@ namespace MTD
     // counted and reported, but it never becomes eligible for a slot.
     public sealed class UnsupportedSnapshot : TableSnapshot
     {
-        static readonly string[] noKeys = new string[0];
-
-        public override IReadOnlyList<string> ResultKeys => noKeys;
     }
 }

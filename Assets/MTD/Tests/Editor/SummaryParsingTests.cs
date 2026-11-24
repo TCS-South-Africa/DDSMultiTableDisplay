@@ -257,6 +257,47 @@ namespace MTD.Tests
             CollectionAssert.AreEqual(new[] { 6, 14 }, snapshot.History.Select(result => result.Total));
         }
 
+        // A widget does not draw a history row MTD cannot read, but the row is still one of the table's results. Its
+        // key keeps its place, so that the registry compares each result with the right one in the next message.
+        [Test]
+        public void UnreadableHistoryRow_IsLeftOutOfTheHistory_ButKeepsItsPlaceAmongTheResultKeys()
+        {
+            MtdTableSummaryMessage message = TestSamples.Roulette(3, "17", "bad", "24", "5", "worse");
+            message.Results[3] = null;
+
+            RouletteSnapshot snapshot = (RouletteSnapshot)SnapshotParser.Parse(message);
+
+            Assert.AreEqual("17", snapshot.Current.Value.Pocket.Label);
+            Assert.IsFalse(snapshot.CurrentResultUnreadable);
+            CollectionAssert.AreEqual(new[] { "24" }, snapshot.History.Select(result => result.Pocket.Label));
+            CollectionAssert.AreEqual(new[] { "17", "?bad", "24", "?", "?worse" }, snapshot.ResultKeys);
+        }
+
+        [Test]
+        public void UnreadableSicBoHistoryRow_IsLeftOutOfTheHistory_ButKeepsItsPlaceAmongTheResultKeys()
+        {
+            MtdTableSummaryMessage message = TestSamples.Roulette(3, "1-2-3", "7-7-7", "4-4-6");
+            message.GameType = "SICBO";
+
+            SicBoSnapshot snapshot = (SicBoSnapshot)SnapshotParser.Parse(message);
+
+            Assert.AreEqual(6, snapshot.Current.Value.Total);
+            CollectionAssert.AreEqual(new[] { 14 }, snapshot.History.Select(result => result.Total));
+            Assert.AreEqual(3, snapshot.ResultKeys.Count);
+            Assert.AreEqual("?7-7-7", snapshot.ResultKeys[1]);
+        }
+
+        [Test]
+        public void UnreadableRows_AreComparedByTheirWholeText_NotTheShortenedOneShownOnScreen()
+        {
+            string longText = new string('x', 40);
+            RouletteSnapshot first = (RouletteSnapshot)SnapshotParser.Parse(TestSamples.Roulette(3, longText + "1", "24"));
+            RouletteSnapshot second = (RouletteSnapshot)SnapshotParser.Parse(TestSamples.Roulette(3, longText + "2", "24"));
+
+            Assert.AreEqual(first.UnreadableCurrentResult, second.UnreadableCurrentResult, "What is shown is cut to a length that fits a widget.");
+            Assert.AreNotEqual(first.ResultKeys[0], second.ResultKeys[0]);
+        }
+
         [Test]
         public void MissingFirstRow_IsAnUnreadableCurrentResult()
         {

@@ -246,6 +246,51 @@ namespace MTD.Tests
             Assert.IsTrue(WaitFor(() => { queue.Drain((k, v) => { }); return tableList.Count == 2; }, 8), "The display did not follow the new bucket.");
         }
 
+        // The same, when the new bucket's entry carries the very revision the display already holds: revision 1 with
+        // table A before, revision 1 with table B after. Nothing about the revision says the list changed. This is
+        // the reported fault; the display stayed on table A however often it asked the server.
+        [Test]
+        public void TConnectClient_TakesTheNewList_WhenARecreatedBucketReachesTheSameRevision()
+        {
+            Guid displayId = Guid.NewGuid();
+            Guid tableA = TestSamples.TableId(1);
+            Guid tableB = TestSamples.TableId(2);
+            Guid tableC = TestSamples.TableId(3);
+
+            serverSide.SubscribeAsync(MtdTopics.AssignDeviceSubject, (sender, args) =>
+            {
+                DeviceAssignmentResponse response = new DeviceAssignmentResponse { TableId = displayId, TableName = "MTD 01", AssignmentCode = "OK", Status = AssignmentStatus.Assigned };
+                serverSide.Publish(args.Message.Reply, Encoding.UTF8.GetBytes(MtdJson.Serialize(response)));
+            });
+            serverSide.Flush(2000);
+
+            IKeyValue bucket = RecreateBucket(MtdTopics.TableListBucket);
+            PutTableList(bucket, displayId, tableA);
+            Assert.AreEqual(1UL, bucket.Get(MtdTopics.TableListKey(displayId)).Revision);
+
+            MainThreadQueue queue = new MainThreadQueue();
+            TableIdListSource tableList = new TableIdListSource();
+            using TConnectMtdClient client = new TConnectMtdClient(transport, Guid.NewGuid(), "MTD 01", queue, tableList) { PingInterval = TimeSpan.FromMilliseconds(400) };
+            client.Start();
+            Assert.IsTrue(WaitFor(() => { queue.Drain((k, v) => { }); return Allows(tableList, tableA); }, 5), "The first list never arrived.");
+
+            bucket = RecreateBucket(MtdTopics.TableListBucket);
+            PutTableList(bucket, displayId, tableB);
+            Assert.AreEqual(1UL, bucket.Get(MtdTopics.TableListKey(displayId)).Revision, "The new bucket's entry must carry the old one's revision for this test to mean anything.");
+
+            Assert.IsTrue(WaitFor(() => { queue.Drain((k, v) => { }); return Allows(tableList, tableB) && !Allows(tableList, tableA); }, 8), "The display stayed on the old bucket's list.");
+
+            PutTableList(bucket, displayId, tableB, tableC);
+            Assert.IsTrue(WaitFor(() => { queue.Drain((k, v) => { }); return tableList.Count == 2; }, 8), "The display did not follow the new bucket.");
+        }
+
+        static bool Allows(TableIdListSource tableList, Guid tableId)
+        {
+            MtdTableSummaryMessage message = TestSamples.Roulette(1, "17");
+            message.TableId = tableId;
+            return tableList.Includes(SnapshotParser.Parse(message));
+        }
+
         NatsMtdTransport RestrictedTransport()
         {
             try

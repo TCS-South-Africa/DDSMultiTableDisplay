@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -43,7 +44,7 @@ namespace MTD
 
         // Main thread only: which table list is in force. See ApplyTableList.
         ulong appliedRevision;
-        bool hasAppliedValue;
+        List<Guid> appliedTableIds; // Null until a list has been put in force.
         ulong lowerRevisionReadBefore;
 
         long unreadableRevision = -1; // Background threads. Keeps an unreadable entry from being logged every 30 seconds.
@@ -263,34 +264,43 @@ namespace MTD
         // Main thread only. The revision is compared at the moment the list is put in force, so however the watch
         // and the direct read interleave, an older list can never replace a newer one.
         //
-        // A revision lower than the one in force is normally just that: old. The exception is a bucket that was
-        // deleted and made again on the server, whose revisions start over. A direct read reports what the server
-        // holds now, so the same lower revision from two direct reads in a row (30 seconds apart) is taken as the
-        // server's current list.
+        // Revisions only order the entries of one bucket. A bucket that was deleted and made again on the server
+        // starts its revisions over, so the list the server holds now can carry a revision that is lower than, or
+        // the same as, the one in force. Only a direct read can show that, because it reports what the server holds
+        // at that moment; the watch belongs to the bucket it was made on.
+        //
+        //  - The same revision with different tables. Within one bucket a revision never changes its contents, so
+        //    this is another bucket, and one direct read is proof.
+        //  - A lower revision. On its own that is normally a late arrival, so it is taken as the server's current
+        //    list only when two direct reads in a row (30 seconds apart) report the same one.
         internal bool ApplyTableList(List<Guid> tableIds, ulong revision, bool isDirectRead)
         {
-            if (hasAppliedValue && revision <= appliedRevision)
+            if (appliedTableIds != null && revision <= appliedRevision)
             {
                 if (!isDirectRead) return false;
 
                 if (revision == appliedRevision)
                 {
                     lowerRevisionReadBefore = 0;
-                    return false;
-                }
+                    if (tableIds.SequenceEqual(appliedTableIds)) return false; // The list in force, read again.
 
-                if (revision != lowerRevisionReadBefore)
+                    Debug.Log($"MTD: T-Connect's table list changed while its revision stayed at {revision}, so the server made its bucket again; taking it as the current list");
+                }
+                else if (revision != lowerRevisionReadBefore)
                 {
                     lowerRevisionReadBefore = revision;
                     return false;
                 }
+                else
+                {
+                    Debug.Log($"MTD: T-Connect's table list went back from revision {appliedRevision} to {revision} and stayed there; taking it as the current list");
+                }
 
-                Debug.Log($"MTD: T-Connect's table list went back from revision {appliedRevision} to {revision} and stayed there; taking it as the current list");
                 watchIsOnAnOldBucket = true;
             }
 
             appliedRevision = revision;
-            hasAppliedValue = true;
+            appliedTableIds = tableIds;
             lowerRevisionReadBefore = 0;
             tableList.SetTables(tableIds);
             Debug.Log($"MTD: T-Connect table list revision {revision} has {tableIds.Count} tables");

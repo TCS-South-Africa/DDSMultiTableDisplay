@@ -201,7 +201,7 @@ Because the widget prefabs hang off the layout, the same UI can use tall column 
 **TLS trust.** With TLS on, MTD goes on talking to a broker only if its certificate passes one of these, in `MtdTlsTrust`, which both transports use:
 
 1. Windows trusts it and it is for the host in `T-Connect|URL` (a name or an IP address in the certificate).
-2. It is for that host and is in `C:\tcs\mtd\TrustedCertificates`, or was issued by a root certificate in that folder. This is for a broker that uses the site's own certificate authority, as the T-Connect server's sample NATS and Mosquitto configurations do: copy the authority's certificate (`.pem`, `.crt`, `.cer` or `.der`) into the folder. The folder is read at every connection attempt, so no restart is needed.
+2. It is for that host, is inside its validity dates, and is in `C:\tcs\mtd\TrustedCertificates` or was issued by a root certificate in that folder. Being in the folder does not excuse an expired certificate, and an expired authority is refused too. This is for a broker that uses the site's own certificate authority, as the T-Connect server's sample NATS and Mosquitto configurations do: copy the authority's certificate (`.pem`, `.crt`, `.cer` or `.der`) into the folder. The folder is read at every connection attempt, so no restart is needed.
 3. `T-Connect|Allow Untrusted Certificate` is ticked. The connection is still encrypted, but MTD cannot tell which broker it reached, and the status line says "certificate NOT checked".
 
 A refusal is shown on the display with the reason. This is stricter than DDS, which accepts any certificate.
@@ -398,7 +398,7 @@ Made on 24 November 2026, on the same branch, in answer to a review of the Pass 
 | Finding | What MTD does now | Where |
 | --- | --- | --- |
 | A summary could update the wrong table: a message on table A's topic naming table B was applied to B. | The table ID in the topic must equal `TableId` in the payload, or the message is ignored and logged once. | `SummaryReader`, `MtdTopics.TryGetSummaryTableId` |
-| An unreadable current result promoted the result before it to current. | The first result row is never dropped. If it cannot be read, the snapshot has no current result and says so, and the widget shows it as unavailable. Unreadable rows further down are still left out. | `SnapshotParser.ReadResults`, `TableSnapshot` |
+| An unreadable current result promoted the result before it to current. | The first result row is never dropped. If it cannot be read, the snapshot has no current result and says so, and the widget shows it as unavailable. Unreadable rows further down are left out of the history a widget draws (the second round, below, changed how they are compared). | `SnapshotParser.ReadResults`, `TableSnapshot` |
 | The T-Connect table list could go back to an older revision when the watch and the 30-second read raced. | The revision is compared on the main thread at the moment a list is put in force, not before it is queued. | `TConnectMtdClient.ApplyTableList` |
 | A correction could be taken for a new result (`[7, 11, 7]` to `[9, 11, 7]`). | The list is read both ways, as results added and as results edited, and the reading that needs fewer changes wins. `GameId` settles a draw. Contract section 6 has the rule. | `TableRegistry.ClassifyResultChange` |
 | A newer summary could be thrown away before the registry saw it, when an older one arrived after it in the same frame. | The queue hands over every message in arrival order and the registry compares event times. Only a main thread that has stopped for a long time loses anything, and then the oldest arrivals (limit 4096). | `MainThreadQueue` |
@@ -409,9 +409,31 @@ Made on 24 November 2026, on the same branch, in answer to a review of the Pass 
 
 Two smaller things changed along the way. A table list whose revision goes backwards is taken as the server's current list once two direct reads in a row report it, which is what a bucket deleted and made again on the server looks like. And the debug status view no longer parses its text, because `C:\tcs` was being drawn with a tab in it.
 
+### Second round
+
+A second review of the fixes above, the same day, left three findings. All three are fixed.
+
+| Finding | What MTD does now | Where |
+| --- | --- | --- |
+| An unreadable history row could reverse the animation decision. `[bad, 24, 5]` becoming `[17, bad, 24, 5]` was reported as a correction, and `[7, bad, 11]` repaired to `[7, 7, 11]` as a new result. The row had been dropped before the lists were compared, so every result below it sat one place too high. | Every row DDS sends gets a key in `ResultKeys`, readable or not, and the registry compares those. `History` still holds only the rows a widget can draw. An unreadable row is compared by its whole text, not the shortened text shown on screen. | `SnapshotParser.ReadResults`, `TableSnapshot.ResultKeys` |
+| Recreating the table-list bucket could leave the old tables on screen for good. Revision 1 holding table A, replaced by a new bucket whose revision 1 held table B, was taken for the same list read again. | A direct read that returns the revision in force with different tables is taken as the server's current list at once. Within one bucket a revision never changes its contents, so this can only be another bucket. The watch is made again, as for a lower revision. | `TConnectMtdClient.ApplyTableList` |
+| A broker's own certificate in `TrustedCertificates` was accepted without its dates being checked. | The validity period is checked before the folder is consulted, and for every certificate up to the root. The display says "expired on" or "not valid until" with the date, instead of asking for an issuer's certificate. `Allow Untrusted Certificate` still accepts anything. | `MtdTlsTrust` |
+
+How it was checked:
+
+| Check | Result |
+| --- | --- |
+| Edit-mode tests | 222 pass (206 before). The 16 new ones cover both reported result lists with the same, different and no game IDs; the same-revision bucket from either path; and expired, not-yet-valid and expired-authority certificates. |
+| The new tests against the old code | With the three fixes taken out again, 13 of the new tests failed, among them each reported case. The other 3 pass either way: they pin behaviour that was already right. |
+| Live NATS tests | 9 pass (8 before) against nats-server 2.15.3. New: revision 1 with table A, bucket deleted and made again, revision 1 with table B. The display moved to B on its next read and then followed the new bucket to revision 2. |
+| Expired certificate, one-off | A local nats-server presenting an expired self-signed certificate, with that same certificate in the trusted folder: the NATS transport refused it and showed "expired on 1 January 2025". The same server was reachable with Allow Untrusted Certificate, and an in-date certificate from the folder was still accepted. MQTT was not run for this; it asks the same `MtdTlsTrust`. |
+
+One related case was seen and left alone, because it is a choice about what a display should show and not a fault. If the server makes its bucket again and writes **no** entry for this display, the direct read finds nothing, the status display says "T-Connect has not sent a table list for this display", and the tables already on screen stay. An entry the server deletes while the watch is running empties the display. Whether a missing entry should also empty it is open.
+
 ### What Pass 2 needs to know
 
 - **A snapshot's results are `Current` and `History`**, not one `Results` list. `Current` is null when the table has no results, and also when `CurrentResultUnreadable` is true. In the second case draw the current result as unavailable, never `History[0]`, and do not play a win animation for it even though the change is `NewResult`. `DebugTableWidget` shows the pattern.
+- **Draw from `Current` and `History`, never from `ResultKeys`.** `ResultKeys` has one entry for every row DDS sent, including rows MTD could not read, so it can be longer than the results a widget has to draw. It is there for the registry.
 - **Status text is plain text.** It can hold a file path or words from a broker, and the headline can be two lines. Turn off rich text and escape-sequence parsing on the text components that show it.
 - **`TableChange.NewResult` can arrive more than once in a frame** for one table, because every message now reaches the registry.
 

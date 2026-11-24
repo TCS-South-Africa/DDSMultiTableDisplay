@@ -168,6 +168,70 @@ namespace MTD.Tests
             Assert.AreEqual(2, tableList.Count, "After the reset, revisions carry on from the new bucket's.");
         }
 
+        // The reported fault: the list in force was revision 1 of the old bucket, and the first entry of the bucket
+        // the server made in its place was revision 1 too. It was taken for the same list read again, so the old
+        // tables stayed on screen however many times the server was asked.
+        [Test]
+        public void SameRevisionWithOtherTables_FromADirectRead_IsTakenAsTheServersCurrentList()
+        {
+            Watch(1, tableA);
+            RunMainThread();
+
+            DirectRead(1, tableB);
+            RunMainThread();
+
+            Assert.AreEqual(1, tableList.Count);
+            Assert.IsTrue(Shows(tableB));
+            Assert.IsFalse(Shows(tableA), "Table A belongs to the bucket the server deleted.");
+
+            Watch(2, tableB, tableC);
+            RunMainThread();
+            Assert.AreEqual(2, tableList.Count, "After the reset, revisions carry on from the new bucket's.");
+        }
+
+        [Test]
+        public void SameRevisionWithOtherTables_IsTaken_WhicheverPathBroughtTheFirstList()
+        {
+            DirectRead(4, tableA, tableB);
+            RunMainThread();
+
+            DirectRead(4, tableA, tableC);
+            RunMainThread();
+
+            Assert.IsTrue(Shows(tableC));
+            Assert.IsFalse(Shows(tableB));
+        }
+
+        [Test]
+        public void SameRevisionWithOtherTables_AfterTheEntryWasDeleted_IsTaken()
+        {
+            Watch(1, tableA);
+            client.OnTableListValue(null, 2, isDirectRead: false); // Deleted: the display is to show no tables.
+            RunMainThread();
+            Assert.AreEqual(0, tableList.Count);
+
+            DirectRead(2, tableB);
+            RunMainThread();
+
+            Assert.IsTrue(Shows(tableB));
+        }
+
+        // Only a direct read says what the server holds now. The watch is tied to the bucket it was made on, so the
+        // next direct read is left to settle it.
+        [Test]
+        public void SameRevisionWithOtherTables_FromTheWatch_WaitsForADirectRead()
+        {
+            DirectRead(1, tableA);
+            Watch(1, tableB);
+            RunMainThread();
+            Assert.IsTrue(Shows(tableA));
+
+            DirectRead(1, tableB);
+            RunMainThread();
+            Assert.IsTrue(Shows(tableB));
+            Assert.IsFalse(Shows(tableA));
+        }
+
         [Test]
         public void LowerRevisionSeenOnce_ThenTheCurrentOneAgain_IsForgotten()
         {

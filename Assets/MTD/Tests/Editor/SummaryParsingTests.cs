@@ -1,0 +1,293 @@
+using System;
+using System.Linq;
+using NUnit.Framework;
+using UnityEngine;
+
+namespace MTD.Tests
+{
+    public class SummaryParsingTests
+    {
+        [Test]
+        public void StandardRoulette_ParsesIdentityLimitsAndResults()
+        {
+            RouletteSnapshot snapshot = (RouletteSnapshot)TestSamples.ReadSnapshot("roulette-standard.json");
+
+            Assert.AreEqual(TestSamples.TableId(1), snapshot.TableId);
+            Assert.AreEqual(new Guid("aaaaaaaa-0000-4000-8000-000000000001"), snapshot.GameId);
+            Assert.AreEqual(GameFamily.Roulette, snapshot.Family);
+            Assert.AreEqual(RouletteVariant.Standard, snapshot.Variant);
+            Assert.AreEqual("AR", snapshot.TableName);
+            Assert.AreEqual(1, snapshot.TableNumber);
+            Assert.AreEqual("1", snapshot.MtdTableNumber);
+            Assert.AreEqual(new Color32(0x0B, 0x4F, 0x8A, 255), snapshot.Colour.Value);
+            Assert.IsTrue(snapshot.TableOpen);
+            Assert.AreEqual(1000, snapshot.MinBet);
+            Assert.AreEqual(1000000, snapshot.MaxBet);
+            Assert.AreEqual("$10", snapshot.MinBetText);
+            Assert.AreEqual("$10,000", snapshot.MaxBetText);
+            Assert.AreEqual(new DateTimeOffset(2026, 11, 24, 10, 15, 30, 123, TimeSpan.Zero), snapshot.EventTime);
+
+            Assert.AreEqual(12, snapshot.Results.Count);
+            Assert.AreEqual("36", snapshot.Results[0].Pocket.Label);
+            Assert.AreEqual(RouletteColour.Red, snapshot.Results[0].Pocket.Colour);
+            Assert.AreEqual(RouletteColour.Black, snapshot.Results[2].Pocket.Colour); // 35
+            Assert.AreEqual(RouletteColour.Green, snapshot.Results[8].Pocket.Colour); // 0
+            Assert.IsFalse(snapshot.Results.Any(result => result.HasMultiplier));
+
+            CollectionAssert.AreEqual(new[] { "35", "14", "8", "22" }, snapshot.HotNumbers.Select(pocket => pocket.Label));
+            CollectionAssert.AreEqual(new[] { "2", "17", "29", "00" }, snapshot.ColdNumbers.Select(pocket => pocket.Label));
+            Assert.AreEqual(RouletteColour.Green, snapshot.ColdNumbers[3].Colour);
+
+            Assert.AreEqual(200, snapshot.GetStatistic("SampleSize"));
+            Assert.AreEqual(92, snapshot.GetStatistic("Red"));
+            Assert.AreEqual(-1, snapshot.GetStatistic("NotSent", -1));
+        }
+
+        [Test]
+        public void RouletteXtra_CarriesMultiplierOnlyOnBonusResults()
+        {
+            RouletteSnapshot snapshot = (RouletteSnapshot)TestSamples.ReadSnapshot("roulette-xtra.json");
+
+            Assert.AreEqual(RouletteVariant.Xtra, snapshot.Variant);
+            Assert.AreEqual(2, snapshot.Results.Count(result => result.HasMultiplier));
+
+            RouletteResult seven = snapshot.Results[6];
+            Assert.AreEqual("7", seven.Pocket.Label);
+            Assert.AreEqual(100, seven.Multiplier);
+            Assert.AreEqual(new Color32(0xC9, 0xA2, 0x27, 255), seven.MultiplierColour.Value);
+
+            Assert.AreEqual("00", snapshot.Results[8].Pocket.Label);
+            Assert.IsTrue(snapshot.Results[8].Pocket.IsZero);
+        }
+
+        [Test]
+        public void PowerReel_CarriesMultiplierOnEveryResult()
+        {
+            RouletteSnapshot snapshot = (RouletteSnapshot)TestSamples.ReadSnapshot("roulette-power-reel.json");
+
+            Assert.AreEqual(RouletteVariant.PowerReel, snapshot.Variant);
+            Assert.AreEqual(5, snapshot.Results.Count);
+            Assert.IsTrue(snapshot.Results.All(result => result.HasMultiplier));
+            CollectionAssert.AreEqual(new[] { 50, 30, 20, 17, 60 }, snapshot.Results.Select(result => result.Multiplier));
+        }
+
+        [Test]
+        public void SicBo_DerivesTotalAndOutcomeFromDice()
+        {
+            SicBoSnapshot snapshot = (SicBoSnapshot)TestSamples.ReadSnapshot("sicbo.json");
+
+            Assert.AreEqual(GameFamily.SicBo, snapshot.Family);
+            Assert.AreEqual("SB", snapshot.TableName);
+            Assert.AreEqual(6, snapshot.Results.Count);
+
+            Assert.AreEqual(15, snapshot.Results[0].Total);
+            Assert.AreEqual(SicBoOutcome.Big, snapshot.Results[0].Outcome);
+            Assert.AreEqual(9, snapshot.Results[1].Total);
+            Assert.AreEqual(SicBoOutcome.Small, snapshot.Results[1].Outcome);
+            Assert.AreEqual(SicBoOutcome.Triple, snapshot.Results[2].Outcome);
+
+            CollectionAssert.AreEqual(new[] { 10, 11, 9 }, snapshot.HotTotals);
+            CollectionAssert.AreEqual(new[] { 4, 17, 5 }, snapshot.ColdTotals);
+            Assert.AreEqual(98, snapshot.GetStatistic("Big"));
+        }
+
+        [Test]
+        public void SicBo_SortsDiceThatArriveUnsorted()
+        {
+            Assert.IsTrue(SicBoResult.TryParse("6-1-4", out SicBoResult result));
+            Assert.AreEqual("1-4-6", result.ToString());
+        }
+
+        [Test]
+        public void SicBo_TotalOfTenIsSmallAndElevenIsBig()
+        {
+            Assert.IsTrue(SicBoResult.TryParse("1-3-6", out SicBoResult ten));
+            Assert.IsTrue(SicBoResult.TryParse("1-4-6", out SicBoResult eleven));
+            Assert.AreEqual(SicBoOutcome.Small, ten.Outcome);
+            Assert.AreEqual(SicBoOutcome.Big, eleven.Outcome);
+        }
+
+        [Test]
+        public void Blackjack_IsRecognisedButUnsupported()
+        {
+            TableSnapshot snapshot = TestSamples.ReadSnapshot("blackjack.json");
+
+            Assert.IsInstanceOf<UnsupportedSnapshot>(snapshot);
+            Assert.AreEqual(GameFamily.Blackjack, snapshot.Family);
+            Assert.AreEqual("BJ", snapshot.TableName);
+        }
+
+        [Test]
+        public void UnknownGameAndUnknownFields_ParseWithoutError()
+        {
+            TableSnapshot snapshot = TestSamples.ReadSnapshot("future-version.json");
+
+            Assert.IsInstanceOf<UnsupportedSnapshot>(snapshot);
+            Assert.AreEqual(GameFamily.Unsupported, snapshot.Family);
+            Assert.AreEqual("SOMETHING_NEW", snapshot.GameType);
+            Assert.IsNull(snapshot.Colour);
+            Assert.IsTrue(snapshot.TableOpen, "A missing TableOpen means open.");
+        }
+
+        [TestCase("ROULETTE", GameFamily.Roulette, RouletteVariant.Standard)]
+        [TestCase("ROULETTE_XTRA", GameFamily.Roulette, RouletteVariant.Xtra)]
+        [TestCase("ROULETTE_POWER", GameFamily.Roulette, RouletteVariant.PowerReel)]
+        [TestCase("ROULETTE_SPREAD", GameFamily.Roulette, RouletteVariant.Standard)]
+        [TestCase("PARIMAX_ROULETTE", GameFamily.Roulette, RouletteVariant.Standard)]
+        [TestCase("sicbo", GameFamily.SicBo, RouletteVariant.Standard)]
+        [TestCase("BLACKJACK", GameFamily.Blackjack, RouletteVariant.Standard)]
+        [TestCase("BACCARAT", GameFamily.Unsupported, RouletteVariant.Standard)]
+        [TestCase("HEADCRACK", GameFamily.Unsupported, RouletteVariant.Standard)]
+        [TestCase(null, GameFamily.Unsupported, RouletteVariant.Standard)]
+        public void GameType_MapsToFamilyAndVariant(string gameType, GameFamily expectedFamily, RouletteVariant expectedVariant)
+        {
+            Assert.AreEqual(expectedFamily, GameTypes.GetFamily(gameType, out RouletteVariant variant));
+            Assert.AreEqual(expectedVariant, variant);
+        }
+
+        [TestCase("0", RouletteColour.Green)]
+        [TestCase("00", RouletteColour.Green)]
+        [TestCase("000", RouletteColour.Green)]
+        [TestCase("0000", RouletteColour.Green)]
+        [TestCase("1", RouletteColour.Red)]
+        [TestCase("2", RouletteColour.Black)]
+        [TestCase("10", RouletteColour.Black)]
+        [TestCase("11", RouletteColour.Black)]
+        [TestCase("18", RouletteColour.Red)]
+        [TestCase("19", RouletteColour.Red)]
+        [TestCase("28", RouletteColour.Black)]
+        [TestCase("36", RouletteColour.Red)]
+        public void RoulettePocket_ParsesWithColour(string label, RouletteColour expected)
+        {
+            Assert.IsTrue(RoulettePocket.TryParse(label, out RoulettePocket pocket));
+            Assert.AreEqual(label, pocket.Label);
+            Assert.AreEqual(expected, pocket.Colour);
+        }
+
+        // 37 is DDS's internal number for "00" and 40 its dealer-change marker. Neither may reach a widget.
+        [TestCase("37")]
+        [TestCase("40")]
+        [TestCase("-1")]
+        [TestCase("07")]
+        [TestCase("1.0")]
+        [TestCase("")]
+        [TestCase(null)]
+        [TestCase("red")]
+        public void RoulettePocket_RejectsAnythingThatIsNotAPocket(string label)
+        {
+            Assert.IsFalse(RoulettePocket.TryParse(label, out _));
+        }
+
+        [TestCase("7-7-7")] // DDS's "invalid result" value, written the way a careless publisher might send it.
+        [TestCase("1-2")]
+        [TestCase("1-2-3-4")]
+        [TestCase("0-1-2")]
+        [TestCase("144")]
+        [TestCase("")]
+        public void SicBoResult_RejectsAnythingThatIsNotThreeDice(string text)
+        {
+            Assert.IsFalse(SicBoResult.TryParse(text, out _));
+        }
+
+        [Test]
+        public void BadEntries_AreDroppedWithoutLosingTheRest()
+        {
+            MtdTableSummaryMessage message = TestSamples.Roulette(3, "17", "40", "banana", "00", null);
+            message.HotNumbers = new System.Collections.Generic.List<string> { "5", "99", "12" };
+            message.MTDColourSetting = "#2704700"; // Seven digits, as in the original request's example.
+
+            RouletteSnapshot snapshot = (RouletteSnapshot)SnapshotParser.Parse(message);
+
+            CollectionAssert.AreEqual(new[] { "17", "00" }, snapshot.Results.Select(result => result.Pocket.Label));
+            CollectionAssert.AreEqual(new[] { "5", "12" }, snapshot.HotNumbers.Select(pocket => pocket.Label));
+            Assert.IsNull(snapshot.Colour);
+        }
+
+        [Test]
+        public void MultiplierOfZeroOrLess_MeansNoMultiplier()
+        {
+            MtdTableSummaryMessage message = TestSamples.Roulette(3, "17", "18");
+            message.Results[0].Multiplier = 0;
+            message.Results[0].MultiplierColour = "#FFFFFF";
+            message.Results[1].Multiplier = -5;
+
+            RouletteSnapshot snapshot = (RouletteSnapshot)SnapshotParser.Parse(message);
+
+            Assert.IsFalse(snapshot.Results[0].HasMultiplier);
+            Assert.IsNull(snapshot.Results[0].MultiplierColour);
+            Assert.IsFalse(snapshot.Results[1].HasMultiplier);
+        }
+
+        [Test]
+        public void MissingLists_GiveEmptySnapshotLists()
+        {
+            MtdTableSummaryMessage message = TestSamples.Roulette(3);
+            message.Results = null;
+
+            RouletteSnapshot snapshot = (RouletteSnapshot)SnapshotParser.Parse(message);
+
+            Assert.AreEqual(0, snapshot.Results.Count);
+            Assert.AreEqual(0, snapshot.HotNumbers.Count);
+            Assert.AreEqual(0, snapshot.ColdNumbers.Count);
+            Assert.AreEqual(0, snapshot.Statistics.Count);
+        }
+
+        [Test]
+        public void MessageWithoutTableId_IsRejected()
+        {
+            MtdTableSummaryMessage message = TestSamples.Roulette(3, "17");
+            message.TableId = Guid.Empty;
+
+            Assert.IsNull(SnapshotParser.Parse(message));
+            Assert.IsNull(SnapshotParser.Parse(null));
+        }
+
+        [TestCase("")]
+        [TestCase("not json")]
+        [TestCase("null")]
+        [TestCase("[1,2,3]")]
+        [TestCase("{\"TableId\":\"not-a-guid\"}")]
+        [TestCase("{\"TableNumber\":\"nineteen\"}")]
+        public void UnusablePayloads_AreReportedNotThrown(string payload)
+        {
+            Assert.IsFalse(MtdJson.TryDeserialize(TestSamples.Bytes(payload), out MtdTableSummaryMessage message, out string error));
+            Assert.IsNull(message);
+            Assert.IsNotEmpty(error);
+        }
+
+        [TestCase("#102030", 0x10, 0x20, 0x30, 0xFF)]
+        [TestCase("102030", 0x10, 0x20, 0x30, 0xFF)]
+        [TestCase("#10203040", 0x10, 0x20, 0x30, 0x40)]
+        [TestCase(" #abcdef ", 0xAB, 0xCD, 0xEF, 0xFF)]
+        public void Colour_ParsesHex(string text, int r, int g, int b, int a)
+        {
+            Assert.IsTrue(MtdColour.TryParse(text, out Color32 colour));
+            Assert.AreEqual(new Color32((byte)r, (byte)g, (byte)b, (byte)a), colour);
+        }
+
+        [TestCase("#12345")]
+        [TestCase("#2704700")]
+        [TestCase("#GGGGGG")]
+        [TestCase("red")]
+        [TestCase("")]
+        [TestCase(null)]
+        public void Colour_RejectsAnythingElse(string text)
+        {
+            Assert.IsFalse(MtdColour.TryParse(text, out _));
+        }
+
+        [Test]
+        public void SerialisedMessage_RoundTrips()
+        {
+            MtdTableSummaryMessage original = TestSamples.ReadMessage("roulette-power-reel.json");
+
+            Assert.IsTrue(MtdJson.TryDeserialize(TestSamples.Bytes(MtdJson.Serialize(original)), out MtdTableSummaryMessage copy, out string error), error);
+
+            Assert.AreEqual(original.TableId, copy.TableId);
+            Assert.AreEqual(original.EventTime, copy.EventTime);
+            Assert.AreEqual(original.Results.Count, copy.Results.Count);
+            Assert.AreEqual(original.Results[0].Multiplier, copy.Results[0].Multiplier);
+            Assert.AreEqual(original.Statistics["Red"], copy.Statistics["Red"]);
+        }
+    }
+}

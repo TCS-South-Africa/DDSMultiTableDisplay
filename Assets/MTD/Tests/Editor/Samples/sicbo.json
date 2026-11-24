@@ -1,0 +1,28 @@
+{
+  "SchemaVersion": 1,
+  "TableId": "11111111-0000-4000-8000-000000000019",
+  "GameId": "aaaaaaaa-0000-4000-8000-000000000019",
+  "GameType": "SICBO",
+  "TableName": "SB",
+  "TableNumber": 19,
+  "MTDTableNumber": "19",
+  "MTDColourSetting": "#0B6E8A",
+  "TableOpen": true,
+  "MinBet": 2000,
+  "MaxBet": 50000,
+  "MinBetText": "$20",
+  "MaxBetText": "$500",
+  "Results": [
+    { "Result": "4-5-6" }, { "Result": "1-2-6" }, { "Result": "3-3-3" },
+    { "Result": "1-1-4" }, { "Result": "2-2-2" }, { "Result": "3-4-6" }
+  ],
+  "HotNumbers": ["10", "11", "9"],
+  "ColdNumbers": ["4", "17", "5"],
+  "Statistics": {
+    "SampleSize": "200",
+    "Small": "94", "Big": "98", "Triple": "8",
+    "Odd": "97", "Even": "95",
+    "Face1": "101", "Face2": "96", "Face3": "104", "Face4": "99", "Face5": "101", "Face6": "99"
+  },
+  "EventTime": "2026-11-24T10:15:33+00:00"
+}

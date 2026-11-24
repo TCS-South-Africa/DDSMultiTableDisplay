@@ -1,0 +1,20 @@
+{
+  "SchemaVersion": 1,
+  "TableId": "11111111-0000-4000-8000-000000000030",
+  "GameId": "aaaaaaaa-0000-4000-8000-000000000030",
+  "GameType": "BLACKJACK",
+  "TableName": "BJ",
+  "TableNumber": 30,
+  "MTDTableNumber": "30",
+  "MTDColourSetting": "#1B5E20",
+  "TableOpen": true,
+  "MinBet": 2500,
+  "MaxBet": 250000,
+  "MinBetText": "$25",
+  "MaxBetText": "$2,500",
+  "Results": [ { "Result": "20" }, { "Result": "22" } ],
+  "HotNumbers": [],
+  "ColdNumbers": [],
+  "Statistics": {},
+  "EventTime": "2026-11-24T10:15:34+00:00"
+}

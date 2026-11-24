@@ -6,7 +6,7 @@ namespace MTD
 {
     // Reads and writes MtdConfig.json. Follows DDS's approach: write a temporary file, check it reads back, swap it
     // in while keeping the previous file as "last known good", and fall back to that file if the main one is ever
-    // unreadable.
+    // unreadable. Only a file that reads back correctly is ever kept as "last known good".
     public static class MtdConfigurationStore
     {
         public const string DefaultFolder = @"C:\tcs\mtd";
@@ -79,14 +79,16 @@ namespace MTD
                 throw new IOException("The configuration did not read back correctly after writing, so the existing file was kept.");
             }
 
-            if (File.Exists(path))
-            {
-                File.Replace(temporaryPath, path, Path.Combine(folder, BackupFileName));
-            }
-            else
+            if (!File.Exists(path))
             {
                 File.Move(temporaryPath, path);
+                return;
             }
+
+            // The file being replaced becomes "last known good" only if it is good. When it is damaged (which is
+            // when Load is repairing it from that very backup), it is simply replaced and the backup is left alone.
+            bool existingIsGood = TryRead(path) != null;
+            File.Replace(temporaryPath, path, existingIsGood ? Path.Combine(folder, BackupFileName) : null);
         }
 
         static MtdConfigurationData TryRead(string path)

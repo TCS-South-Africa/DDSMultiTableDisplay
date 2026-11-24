@@ -31,9 +31,25 @@ namespace MTD
         public IReadOnlyDictionary<string, string> Statistics { get; internal set; } = noStatistics;
         public DateTimeOffset EventTime { get; internal set; }
 
+        // What DDS sent as its latest result when this MTD could not read it; null when there was no such problem.
+        // The table then has no current result to show, and a widget draws that place as unavailable. An older
+        // result is never moved up to stand in for it.
+        public string UnreadableCurrentResult { get; internal set; }
+
+        public bool CurrentResultUnreadable => UnreadableCurrentResult != null;
+
         // One text key per result, newest first. Lets the registry tell a new result from a correction without
-        // knowing the game.
+        // knowing the game. An unreadable current result keeps its place, under a key of its own.
         public abstract IReadOnlyList<string> ResultKeys { get; }
+
+        protected IReadOnlyList<string> BuildResultKeys(string currentKey, IEnumerable<string> historyKeys)
+        {
+            List<string> keys = new List<string>();
+            if (CurrentResultUnreadable) keys.Add("?" + UnreadableCurrentResult);
+            else if (currentKey != null) keys.Add(currentKey);
+            keys.AddRange(historyKeys);
+            return keys;
+        }
 
         // A statistic count, or the fallback when DDS did not send that key or it is not a number.
         public int GetStatistic(string key, int fallback = 0)
@@ -80,15 +96,19 @@ namespace MTD
         IReadOnlyList<string> resultKeys;
 
         public RouletteVariant Variant { get; internal set; }
-        public IReadOnlyList<RouletteResult> Results { get; internal set; } = noResults; // Newest first.
+        public RouletteResult? Current { get; internal set; } // The latest result. Null when there is none, or it could not be read.
+        public IReadOnlyList<RouletteResult> History { get; internal set; } = noResults; // The results before it, newest first.
         public IReadOnlyList<RoulettePocket> HotNumbers { get; internal set; } = noPockets; // Hottest first.
         public IReadOnlyList<RoulettePocket> ColdNumbers { get; internal set; } = noPockets; // Coldest first.
 
-        public override IReadOnlyList<string> ResultKeys => resultKeys ??= Results
-            .Select(result => result.HasMultiplier
+        public override IReadOnlyList<string> ResultKeys => resultKeys ??= BuildResultKeys(Current.HasValue ? Key(Current.Value) : null, History.Select(Key));
+
+        static string Key(RouletteResult result)
+        {
+            return result.HasMultiplier
                 ? $"{result.Pocket.Label}x{result.Multiplier}{(result.MultiplierColour.HasValue ? MtdColour.ToHex(result.MultiplierColour.Value) : "")}"
-                : result.Pocket.Label)
-            .ToArray();
+                : result.Pocket.Label;
+        }
 
         protected override void AppendExtraSignature(StringBuilder builder)
         {
@@ -104,11 +124,12 @@ namespace MTD
 
         IReadOnlyList<string> resultKeys;
 
-        public IReadOnlyList<SicBoResult> Results { get; internal set; } = noResults; // Newest first.
+        public SicBoResult? Current { get; internal set; } // The latest result. Null when there is none, or it could not be read.
+        public IReadOnlyList<SicBoResult> History { get; internal set; } = noResults; // The results before it, newest first.
         public IReadOnlyList<int> HotTotals { get; internal set; } = noTotals; // Hottest first.
         public IReadOnlyList<int> ColdTotals { get; internal set; } = noTotals; // Coldest first.
 
-        public override IReadOnlyList<string> ResultKeys => resultKeys ??= Results.Select(result => result.ToString()).ToArray();
+        public override IReadOnlyList<string> ResultKeys => resultKeys ??= BuildResultKeys(Current?.ToString(), History.Select(result => result.ToString()));
 
         protected override void AppendExtraSignature(StringBuilder builder)
         {

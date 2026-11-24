@@ -4,22 +4,50 @@ using System.Collections.Generic;
 
 namespace MTD
 {
-    // Carries work from transport threads to Unity's main thread. Messages are kept per key with the newest
-    // replacing any still waiting, because only a table's latest summary matters. Actions run in the order posted.
+    // Carries work from transport threads to Unity's main thread. Messages and actions are each handed over in the
+    // order they arrived.
+    //
+    // The queue does not decide which of two messages for a table is the newer one: arrival order is not sending
+    // order, so every message goes to the registry, which compares their event times. Only when the main thread has
+    // stopped draining for a long time does the queue let go of anything, and then it is the oldest arrivals.
     public sealed class MainThreadQueue
     {
+        public const int DefaultMessageLimit = 4096;
+
         readonly object gate = new object();
         readonly ConcurrentQueue<Action> actions = new ConcurrentQueue<Action>();
+        readonly int messageLimit;
 
-        Dictionary<string, byte[]> pending = new Dictionary<string, byte[]>();
-        Dictionary<string, byte[]> spare = new Dictionary<string, byte[]>();
+        Queue<(string topic, byte[] payload)> pending = new Queue<(string, byte[])>();
+        Queue<(string topic, byte[] payload)> spare = new Queue<(string, byte[])>();
+        long droppedMessages;
+
+        public MainThreadQueue(int messageLimit = DefaultMessageLimit)
+        {
+            this.messageLimit = Math.Max(1, messageLimit);
+        }
+
+        // How many messages were let go because the main thread was not draining. Any thread.
+        public long DroppedMessages
+        {
+            get
+            {
+                lock (gate) return droppedMessages;
+            }
+        }
 
         // Any thread.
-        public void PostLatest(string key, byte[] payload)
+        public void PostMessage(string topic, byte[] payload)
         {
             lock (gate)
             {
-                pending[key] = payload;
+                if (pending.Count >= messageLimit)
+                {
+                    pending.Dequeue();
+                    droppedMessages++;
+                }
+
+                pending.Enqueue((topic, payload));
             }
         }
 
@@ -34,7 +62,7 @@ namespace MTD
         {
             while (actions.TryDequeue(out Action action)) action();
 
-            Dictionary<string, byte[]> batch;
+            Queue<(string topic, byte[] payload)> batch;
             lock (gate)
             {
                 if (pending.Count == 0) return;
@@ -42,10 +70,19 @@ namespace MTD
                 pending = spare;
             }
 
-            foreach (KeyValuePair<string, byte[]> message in batch) onMessage(message.Key, message.Value);
-
-            batch.Clear();
-            spare = batch;
+            try
+            {
+                while (batch.Count > 0)
+                {
+                    (string topic, byte[] payload) = batch.Dequeue();
+                    onMessage(topic, payload);
+                }
+            }
+            finally
+            {
+                batch.Clear();
+                lock (gate) spare = batch;
+            }
         }
     }
 }

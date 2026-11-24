@@ -9,9 +9,12 @@ namespace MTD
     }
 
     // What the display should tell someone standing in front of it when it is not simply showing tables.
+    //
+    // Both texts are plain text and can hold file paths and words that came from a broker. Show them with rich text
+    // and escape-sequence parsing turned off (TMP: richText and parseCtrlCharacters), or "C:\tcs" is drawn as a tab.
     public sealed class MtdStatus
     {
-        public string Headline = ""; // One line for any MTD UI to show. Empty when everything is working.
+        public string Headline = ""; // One or two short lines for any MTD UI to show. Empty when everything is working.
         public string Details = ""; // Several lines for diagnosis. The debug UI shows them; a styled UI may not.
 
         public bool SameAs(MtdStatus other)

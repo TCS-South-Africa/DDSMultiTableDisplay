@@ -6,6 +6,11 @@ namespace MTD
     // The base of every table widget. One widget prefab draws one table in one slot. An MTD UI supplies its own
     // widget prefabs with scripts derived from this (usually through RouletteTableWidget or SicBoTableWidget); the
     // display controller is the only caller.
+    //
+    // A snapshot's latest result is its Current, and the ones before it are its History. Current is null when the
+    // table has no results yet, and also when DDS sent a latest result this MTD cannot read
+    // (CurrentResultUnreadable). In that second case draw the current result as unavailable: never show History[0]
+    // in its place, and do not play a win animation for it even when the change is NewResult.
     public abstract class TableWidget : MonoBehaviour
     {
         // The table this widget is showing. Null before the first Bind.

@@ -70,22 +70,24 @@ namespace MTD
 
         static void DrawRoulette(StringBuilder builder, RouletteSnapshot table)
         {
-            for (int i = 0; i < table.Results.Count && i < maxResults; i++)
+            int rows = 0;
+            if (table.CurrentResultUnreadable)
             {
-                RouletteResult result = table.Results[i];
-                if (i == 0) builder.Append("<size=260%><b>");
-                AppendPocket(builder, result.Pocket);
-                if (i == 0) builder.Append("</b></size>");
-                if (result.HasMultiplier)
-                {
-                    string chip = result.MultiplierColour.HasValue ? MtdColour.ToHex(result.MultiplierColour.Value) : gold;
-                    builder.Append("  <color=").Append(chip).Append(">x").Append(result.Multiplier).Append("</color>");
-                }
-
-                builder.Append('\n');
+                AppendUnreadableCurrent(builder, table, "260%");
+                rows++;
+            }
+            else if (table.Current.HasValue)
+            {
+                AppendRouletteResult(builder, table.Current.Value, isCurrent: true);
+                rows++;
             }
 
-            if (table.Results.Count == 0) builder.Append("(no results)\n");
+            for (int i = 0; i < table.History.Count && rows < maxResults; i++, rows++)
+            {
+                AppendRouletteResult(builder, table.History[i], isCurrent: false);
+            }
+
+            if (rows == 0) builder.Append("(no results)\n");
 
             if (table.HotNumbers.Count > 0)
             {
@@ -109,6 +111,28 @@ namespace MTD
             }
         }
 
+        static void AppendRouletteResult(StringBuilder builder, RouletteResult result, bool isCurrent)
+        {
+            if (isCurrent) builder.Append("<size=260%><b>");
+            AppendPocket(builder, result.Pocket);
+            if (isCurrent) builder.Append("</b></size>");
+            if (result.HasMultiplier)
+            {
+                string chip = result.MultiplierColour.HasValue ? MtdColour.ToHex(result.MultiplierColour.Value) : gold;
+                builder.Append("  <color=").Append(chip).Append(">x").Append(result.Multiplier).Append("</color>");
+            }
+
+            builder.Append('\n');
+        }
+
+        // The table has a newer result than any shown below, but DDS sent it in a form this MTD cannot read.
+        static void AppendUnreadableCurrent(StringBuilder builder, TableSnapshot table, string size)
+        {
+            builder.Append("<size=").Append(size).Append("><b>?</b></size>  <color=").Append(dim).Append(">unreadable result");
+            if (table.UnreadableCurrentResult.Length > 0) builder.Append(" \"<noparse>").Append(table.UnreadableCurrentResult).Append("</noparse>\"");
+            builder.Append("</color>\n");
+        }
+
         static void AppendPocket(StringBuilder builder, RoulettePocket pocket)
         {
             string colour = pocket.Colour == RouletteColour.Red ? red : pocket.Colour == RouletteColour.Green ? green : black;
@@ -117,31 +141,24 @@ namespace MTD
 
         static void DrawSicBo(StringBuilder builder, SicBoSnapshot table)
         {
-            for (int i = 0; i < table.Results.Count && i < maxResults; i++)
+            int rows = 0;
+            if (table.CurrentResultUnreadable)
             {
-                SicBoResult result = table.Results[i];
-                if (i == 0) builder.Append("<size=200%><b>");
-                builder.Append(result.Die1).Append(' ').Append(result.Die2).Append(' ').Append(result.Die3);
-                if (i == 0) builder.Append("</b></size>");
-                builder.Append("  <color=").Append(gold).Append('>').Append(result.Total).Append("</color> ");
-
-                switch (result.Outcome)
-                {
-                    case SicBoOutcome.Big:
-                        builder.Append("<color=").Append(blue).Append(">BIG</color>");
-                        break;
-                    case SicBoOutcome.Small:
-                        builder.Append("<color=").Append(red).Append(">SMALL</color>");
-                        break;
-                    default:
-                        builder.Append("<color=").Append(green).Append(">TRIPLE</color>");
-                        break;
-                }
-
-                builder.Append('\n');
+                AppendUnreadableCurrent(builder, table, "200%");
+                rows++;
+            }
+            else if (table.Current.HasValue)
+            {
+                AppendSicBoResult(builder, table.Current.Value, isCurrent: true);
+                rows++;
             }
 
-            if (table.Results.Count == 0) builder.Append("(no results)\n");
+            for (int i = 0; i < table.History.Count && rows < maxResults; i++, rows++)
+            {
+                AppendSicBoResult(builder, table.History[i], isCurrent: false);
+            }
+
+            if (rows == 0) builder.Append("(no results)\n");
 
             if (table.HotTotals.Count > 0) builder.Append("\nHOT ").Append(string.Join(" ", table.HotTotals));
             if (table.ColdTotals.Count > 0) builder.Append("\nCOLD ").Append(string.Join(" ", table.ColdTotals));
@@ -154,6 +171,29 @@ namespace MTD
                     .Append("  <color=").Append(green).Append(">T ").Append(Percent(table.GetStatistic("Triple"), sample)).Append("</color>")
                     .Append("  <color=").Append(dim).Append(">n=").Append(sample).Append("</color>\n");
             }
+        }
+
+        static void AppendSicBoResult(StringBuilder builder, SicBoResult result, bool isCurrent)
+        {
+            if (isCurrent) builder.Append("<size=200%><b>");
+            builder.Append(result.Die1).Append(' ').Append(result.Die2).Append(' ').Append(result.Die3);
+            if (isCurrent) builder.Append("</b></size>");
+            builder.Append("  <color=").Append(gold).Append('>').Append(result.Total).Append("</color> ");
+
+            switch (result.Outcome)
+            {
+                case SicBoOutcome.Big:
+                    builder.Append("<color=").Append(blue).Append(">BIG</color>");
+                    break;
+                case SicBoOutcome.Small:
+                    builder.Append("<color=").Append(red).Append(">SMALL</color>");
+                    break;
+                default:
+                    builder.Append("<color=").Append(green).Append(">TRIPLE</color>");
+                    break;
+            }
+
+            builder.Append('\n');
         }
 
         static string Percent(int count, int sample)

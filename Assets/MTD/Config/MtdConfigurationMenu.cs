@@ -106,12 +106,16 @@ namespace MTD
             AddText(tConnect, "T-Connect|Username", null, "none",
                 c => c.tConnect.username, (c, v) => c.tConnect.username = v);
             AddText(tConnect, "T-Connect|Password", null, "none",
-                c => c.tConnect.password, (c, v) => c.tConnect.password = v);
+                c => c.tConnect.password, (c, v) => c.tConnect.password = v,
+                isPassword: true);
             AddText(tConnect, "T-Connect|Site Name", "MQTT only. Must match the Site Name set on the DDS tables. Not used with NATS.", "testsite",
                 c => c.tConnect.siteName, (c, v) => c.tConnect.siteName = v,
                 isEnabled: c => !c.tConnect.useNats);
-            AddCheckbox(tConnect, "T-Connect|TLS", null,
+            AddCheckbox(tConnect, "T-Connect|TLS", "Encrypt the connection and check the broker's certificate. The certificate must be for the host in URL, and be trusted by Windows or issued by a certificate placed in " + MtdTlsTrust.DefaultTrustedFolder + ".",
                 c => c.tConnect.useTLS, (c, v) => c.tConnect.useTLS = v);
+            AddCheckbox(tConnect, "T-Connect|Allow Untrusted Certificate", "TLS only. Accept the broker's certificate without checking it. The connection is still encrypted, but MTD can no longer tell whether it reached the real broker. Leave unticked wherever the certificate can be trusted instead.",
+                c => c.tConnect.allowUntrustedCertificate, (c, v) => c.tConnect.allowUntrustedCertificate = v,
+                isEnabled: c => c.tConnect.useTLS);
             AddCheckbox(tConnect, "T-Connect|Use NATS", "Connect over NATS. Untick to use MQTT. The T-Connect table list needs NATS.",
                 c => c.tConnect.useNats, (c, v) => c.tConnect.useNats = v);
             AddText(tConnect, "T-Connect|MTD Name", "The name this display registers under with T-Connect.", "MTD 01",
@@ -294,9 +298,11 @@ namespace MTD
         }
 
         void AddText(string tab, string key, string tooltip, string placeholder, Func<MtdConfigurationData, string> get, Action<MtdConfigurationData, string> set,
-            Func<MtdConfigurationData, bool> isEnabled = null, bool shrinkToFit = false)
+            Func<MtdConfigurationData, bool> isEnabled = null, bool shrinkToFit = false, bool isPassword = false)
         {
-            TMP_InputField input = CreateInput(tab, key, placeholder, TMP_InputField.ContentType.Standard);
+            // A password is drawn as asterisks, while it is typed as well as when the menu opens: the display this
+            // runs on may be in public view.
+            TMP_InputField input = CreateInput(tab, key, placeholder, isPassword ? TMP_InputField.ContentType.Password : TMP_InputField.ContentType.Standard);
             if (shrinkToFit)
             {
                 // For a value that is read, not typed, and is longer than the field at the normal size.

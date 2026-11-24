@@ -66,5 +66,28 @@ namespace MTD.Tests
         {
             return SnapshotParser.Parse(Roulette(tableNumber, results));
         }
+
+        // The topic DDS publishes a table's summary on, in MQTT form.
+        public static string Topic(int tableNumber)
+        {
+            return MtdTopics.TableSummary("crown", TableId(tableNumber));
+        }
+
+        // Every result a snapshot can show, newest first: the current one when it is readable, then the history.
+        public static System.Collections.Generic.List<RouletteResult> AllResults(this RouletteSnapshot snapshot)
+        {
+            System.Collections.Generic.List<RouletteResult> results = new System.Collections.Generic.List<RouletteResult>();
+            if (snapshot.Current.HasValue) results.Add(snapshot.Current.Value);
+            results.AddRange(snapshot.History);
+            return results;
+        }
+
+        public static System.Collections.Generic.List<SicBoResult> AllResults(this SicBoSnapshot snapshot)
+        {
+            System.Collections.Generic.List<SicBoResult> results = new System.Collections.Generic.List<SicBoResult>();
+            if (snapshot.Current.HasValue) results.Add(snapshot.Current.Value);
+            results.AddRange(snapshot.History);
+            return results;
+        }
     }
 }

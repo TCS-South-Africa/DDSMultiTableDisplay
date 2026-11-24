@@ -29,8 +29,10 @@ namespace MTD
         const string deviceType = "MTD";
         static readonly TimeSpan requestTimeout = TimeSpan.FromSeconds(3);
         static readonly TimeSpan assignmentRetryInterval = TimeSpan.FromSeconds(30);
-        static readonly TimeSpan pingInterval = TimeSpan.FromSeconds(30);
         static readonly TimeSpan connectionPollInterval = TimeSpan.FromSeconds(1);
+
+        // How often the display pings the server and reads its table list directly.
+        internal TimeSpan PingInterval = TimeSpan.FromSeconds(30);
 
         readonly NatsMtdTransport transport;
         readonly Guid deviceId;
@@ -38,11 +40,16 @@ namespace MTD
         readonly MainThreadQueue mainThread;
         readonly TableIdListSource tableList;
         readonly CancellationTokenSource lifetime = new CancellationTokenSource();
-        readonly object revisionGate = new object();
 
+        // Main thread only: which table list is in force. See ApplyTableList.
         ulong appliedRevision;
         bool hasAppliedValue;
+        ulong lowerRevisionReadBefore;
+
+        long unreadableRevision = -1; // Background threads. Keeps an unreadable entry from being logged every 30 seconds.
+        volatile bool watchIsOnAnOldBucket; // Set on the main thread, acted on by the client's own task.
         IDisposable watch;
+        int watchGeneration; // The transport's connection generation the watch was made on.
         bool started;
 
         public TConnectMtdClient(NatsMtdTransport transport, Guid deviceId, string mtdName, MainThreadQueue mainThread, TableIdListSource tableList)
@@ -84,7 +91,7 @@ namespace MTD
                         FollowTableList();
                     }
 
-                    await Task.Delay(pingInterval, token).ConfigureAwait(false);
+                    await Task.Delay(PingInterval, token).ConfigureAwait(false);
                 }
             }
             catch (OperationCanceledException)
@@ -196,11 +203,24 @@ namespace MTD
 
             try
             {
-                watch ??= transport.WatchKeyValue(MtdTopics.TableListBucket, key, OnTableListValue);
+                // A watch belongs to one bucket on one connection. If the server made the bucket again, or the
+                // transport had to replace its connection, the watch in hand is dead and a new one is needed.
+                int generation = transport.ConnectionGeneration;
+                if (watchIsOnAnOldBucket || generation != watchGeneration)
+                {
+                    watchIsOnAnOldBucket = false;
+                    StopWatch();
+                }
+
+                if (watch == null)
+                {
+                    watch = transport.WatchKeyValue(MtdTopics.TableListBucket, key, (watchedValue, watchedRevision) => OnTableListValue(watchedValue, watchedRevision, isDirectRead: false));
+                    watchGeneration = generation;
+                }
 
                 if (transport.TryGetKeyValue(MtdTopics.TableListBucket, key, out byte[] value, out ulong revision))
                 {
-                    OnTableListValue(value, revision);
+                    OnTableListValue(value, revision, isDirectRead: true);
                     TableListProblem = null;
                 }
                 else
@@ -216,52 +236,90 @@ namespace MTD
             }
         }
 
-        // Runs on a NATS thread (watch) or the client's own task (direct read).
-        void OnTableListValue(byte[] value, ulong revision)
+        // Runs on a NATS thread (watch) or the client's own task (direct read). The two can deliver the same or
+        // different revisions in either order, so nothing is decided here: the entry is only read and handed to the
+        // main thread, where ApplyTableList decides in one place.
+        internal void OnTableListValue(byte[] value, ulong revision, bool isDirectRead)
         {
-            lock (revisionGate)
-            {
-                if (hasAppliedValue && revision <= appliedRevision) return;
-                appliedRevision = revision;
-                hasAppliedValue = true;
-            }
-
             List<Guid> tableIds = new List<Guid>();
             if (value != null)
             {
                 if (!MtdJson.TryDeserialize(value, out MtdTableListMessage message, out string error))
                 {
-                    Debug.Log($"MTD: the T-Connect table list could not be read: {error}");
+                    if (Interlocked.Exchange(ref unreadableRevision, (long)revision) != (long)revision)
+                    {
+                        Debug.Log($"MTD: T-Connect table list revision {revision} could not be read, so the list in use stays: {error}");
+                    }
+
                     return;
                 }
 
                 if (message.AvailableTableIds != null) tableIds.AddRange(message.AvailableTableIds);
             }
 
+            mainThread.Post(() => ApplyTableList(tableIds, revision, isDirectRead));
+        }
+
+        // Main thread only. The revision is compared at the moment the list is put in force, so however the watch
+        // and the direct read interleave, an older list can never replace a newer one.
+        //
+        // A revision lower than the one in force is normally just that: old. The exception is a bucket that was
+        // deleted and made again on the server, whose revisions start over. A direct read reports what the server
+        // holds now, so the same lower revision from two direct reads in a row (30 seconds apart) is taken as the
+        // server's current list.
+        internal bool ApplyTableList(List<Guid> tableIds, ulong revision, bool isDirectRead)
+        {
+            if (hasAppliedValue && revision <= appliedRevision)
+            {
+                if (!isDirectRead) return false;
+
+                if (revision == appliedRevision)
+                {
+                    lowerRevisionReadBefore = 0;
+                    return false;
+                }
+
+                if (revision != lowerRevisionReadBefore)
+                {
+                    lowerRevisionReadBefore = revision;
+                    return false;
+                }
+
+                Debug.Log($"MTD: T-Connect's table list went back from revision {appliedRevision} to {revision} and stayed there; taking it as the current list");
+                watchIsOnAnOldBucket = true;
+            }
+
+            appliedRevision = revision;
+            hasAppliedValue = true;
+            lowerRevisionReadBefore = 0;
+            tableList.SetTables(tableIds);
             Debug.Log($"MTD: T-Connect table list revision {revision} has {tableIds.Count} tables");
-            mainThread.Post(() => tableList.SetTables(tableIds));
+            return true;
         }
 
         public void Dispose()
         {
             lifetime.Cancel();
+            StopWatch();
+        }
 
+        void StopWatch()
+        {
             IDisposable toStop = watch;
             watch = null;
-            if (toStop != null)
+            if (toStop == null) return;
+
+            // Unsubscribing talks to the server, so it is kept off the caller's thread.
+            Task.Run(() =>
             {
-                // Unsubscribing talks to the server, so it is kept off the caller's thread.
-                Task.Run(() =>
+                try
                 {
-                    try
-                    {
-                        toStop.Dispose();
-                    }
-                    catch (Exception)
-                    {
-                    }
-                });
-            }
+                    toStop.Dispose();
+                }
+                catch (Exception)
+                {
+                }
+            });
         }
     }
 }

@@ -16,25 +16,38 @@ namespace MTD
         public string Username;
         public string Password;
         public bool UseTls;
+        public bool AllowUntrustedCertificate; // Accept the broker's TLS certificate without checking it. See MtdTlsTrust.
+        public string TrustedCertificateFolder; // Null means MtdTlsTrust.DefaultTrustedFolder.
     }
 
     // NATS connection, adapted from DDS's NatsTConnect2Transport. MTD only subscribes, makes the occasional request
     // and reads Key-Value entries, so DDS's ordered publish queue and its socket deadline handling are not needed.
+    //
+    // The NATS client reconnects by itself after a network fault, but in two cases it does not, and both are
+    // handled here by connecting again from scratch every few seconds:
+    //  - the first connection has never succeeded;
+    //  - the server closed the connection. This client treats an error from the server as final, and the usual one
+    //    is the server refusing a subscription this display's login is not allowed.
     public sealed class NatsMtdTransport : IMtdTransport
     {
         const int connectTimeoutMilliseconds = 5000;
         const int reconnectWaitMilliseconds = 2000;
-        const int firstConnectionRetrySeconds = 5;
 
         readonly MtdConnectionSettings settings;
         readonly CancellationTokenSource lifetime = new CancellationTokenSource();
         readonly object gate = new object();
         readonly List<(string subject, MtdMessageHandler handler)> subscriptions = new List<(string, MtdMessageHandler)>();
 
-        IConnection connection; // Set once, when the first connection succeeds. Guarded by gate.
+        IConnection connection; // The connection in use, replaced when the server closes it. Guarded by gate.
+        bool connecting; // True while ConnectUntilUp is running or about to. Guarded by gate.
+        int connectionGeneration; // Guarded by gate.
         volatile bool isUp;
         volatile bool disposed;
         volatile string lastError;
+        volatile string certificateProblem;
+        volatile bool certificateWasChecked;
+        volatile string closeProblem;
+        readonly HashSet<string> loggedWhileUnsettled = new HashSet<string>(); // Its own lock.
         bool started;
 
         public NatsMtdTransport(MtdConnectionSettings settings)
@@ -42,11 +55,29 @@ namespace MTD
             this.settings = settings;
         }
 
+        // How long to wait before connecting again after a failed attempt or after the server closed the connection.
+        internal TimeSpan RetryInterval = TimeSpan.FromSeconds(5);
+
+        // A connection has to stay up this long before the reason the server closed the last one is forgotten.
+        // A refused subscription closes the new connection within moments, every time, so until then the reason
+        // stays on the status display instead of flickering away at each attempt.
+        internal TimeSpan StableAfter = TimeSpan.FromSeconds(4);
+
         public string Name => "NATS";
 
         public bool Connected => isUp && !disposed;
 
-        public string LastError => lastError;
+        public string LastError => closeProblem ?? certificateProblem ?? lastError;
+
+        // Goes up each time a new connection replaces a closed one. Anything tied to the old connection, such as a
+        // Key-Value watch, is gone when this changes.
+        public int ConnectionGeneration
+        {
+            get
+            {
+                lock (gate) return connectionGeneration;
+            }
+        }
 
         string ServerUrl => $"{(settings.UseTls ? "tls" : "nats")}://{settings.Host}:{(settings.Port > 0 ? settings.Port : MtdTopics.DefaultNatsPort)}";
 
@@ -56,19 +87,19 @@ namespace MTD
             {
                 if (started || disposed) return;
                 started = true;
+                connecting = true;
             }
 
             Task.Run(ConnectUntilUp);
         }
 
-        // The NATS client only reconnects by itself after a first successful connection, so the first one is
-        // retried here.
         void ConnectUntilUp()
         {
-            Debug.Log($"MTD: connecting to NATS at {ServerUrl}");
+            Log($"MTD: connecting to NATS at {ServerUrl}");
 
             while (!disposed)
             {
+                certificateWasChecked = false;
                 try
                 {
                     IConnection newConnection = new ConnectionFactory().CreateConnection(CreateOptions(), false);
@@ -82,6 +113,8 @@ namespace MTD
                         }
 
                         connection = newConnection;
+                        connectionGeneration++;
+                        connecting = false;
                         isUp = true;
                         lastError = null;
                         foreach ((string subject, MtdMessageHandler handler) in subscriptions)
@@ -90,17 +123,113 @@ namespace MTD
                         }
                     }
 
-                    Debug.Log($"MTD: connected to NATS at {ServerUrl}");
+                    Log($"MTD: connected to NATS at {ServerUrl}");
+                    ForgetCloseProblemOnceStable(newConnection);
+
+                    // If the server closed it in the instant before it became the connection in use, that
+                    // event was not acted on. Act on it now.
+                    if (newConnection.State == ConnState.CLOSED) OnClosed(newConnection, newConnection.LastError);
                     return;
                 }
                 catch (Exception exception)
                 {
-                    lastError = exception.InnerException != null ? $"{exception.Message} ({exception.InnerException.Message})" : exception.Message;
-                    Debug.Log($"MTD: could not connect to NATS at {ServerUrl}: {lastError}");
+                    // A certificate refusal from an earlier attempt must not hide a different failure in this one.
+                    if (!certificateWasChecked) certificateProblem = null;
+
+                    lastError = MtdTransportErrors.Describe(exception);
+                    Log($"MTD: could not connect to NATS at {ServerUrl}: {certificateProblem ?? lastError}");
                 }
 
-                if (lifetime.Token.WaitHandle.WaitOne(TimeSpan.FromSeconds(firstConnectionRetrySeconds))) return;
+                if (lifetime.Token.WaitHandle.WaitOne(RetryInterval)) return;
             }
+        }
+
+        // Connecting can go round every few seconds for as long as something is wrong, through the same few states
+        // each time. Each message is logged once until a connection has settled.
+        void Log(string message)
+        {
+            lock (loggedWhileUnsettled)
+            {
+                if (!loggedWhileUnsettled.Add(message)) return;
+            }
+
+            Debug.Log(message);
+        }
+
+        void ForgetCloseProblemOnceStable(IConnection established)
+        {
+            if (closeProblem == null)
+            {
+                lock (loggedWhileUnsettled) loggedWhileUnsettled.Clear();
+                return;
+            }
+
+            Task.Run(() =>
+            {
+                if (lifetime.Token.WaitHandle.WaitOne(StableAfter)) return;
+
+                lock (gate)
+                {
+                    if (!ReferenceEquals(connection, established) || !isUp) return;
+                    closeProblem = null;
+                }
+
+                lock (loggedWhileUnsettled) loggedWhileUnsettled.Clear();
+                Debug.Log($"MTD: the NATS connection to {ServerUrl} is staying up again");
+            });
+        }
+
+        // The server closed the connection and this client will not reopen it. Wait, then start again from scratch,
+        // which also puts every subscription back. If the cause is still there the server closes the new connection
+        // too, and this goes round again until someone corrects it on the server.
+        void OnClosed(IConnection closed, Exception error)
+        {
+            lock (gate)
+            {
+                // A connection that fails while it is being set up reports "closed" as well. Only the one in use counts.
+                if (disposed || connecting || !ReferenceEquals(connection, closed)) return;
+                connection = null;
+                connecting = true;
+                isUp = false;
+            }
+
+            string reason = DescribeCloseReason(error);
+            if (reason != null) closeProblem = reason;
+            Log($"MTD: NATS connection closed: {reason ?? "no reason given"}. Connecting again every {RetryInterval.TotalSeconds:0.#} s.");
+
+            Task.Run(() =>
+            {
+                if (lifetime.Token.WaitHandle.WaitOne(RetryInterval))
+                {
+                    lock (gate) connecting = false;
+                    return;
+                }
+
+                ConnectUntilUp();
+            });
+        }
+
+        // What the server said when it closed the connection, in words for the status display.
+        static string DescribeCloseReason(Exception error)
+        {
+            string text = (error?.Message ?? "").Trim();
+            if (text.Length == 0) return null;
+
+            const string clientPrefix = "Error from processErr():";
+            if (text.StartsWith(clientPrefix, StringComparison.OrdinalIgnoreCase)) text = text.Substring(clientPrefix.Length).Trim();
+
+            // The client cuts the closing quote off a quoted subject.
+            int quotes = 0;
+            foreach (char character in text)
+            {
+                if (character == '"') quotes++;
+            }
+
+            if (quotes % 2 == 1) text += "\"";
+
+            return text.IndexOf("permissions violation", StringComparison.OrdinalIgnoreCase) >= 0
+                ? $"the server refused this display's login ({text})"
+                : $"the server closed the connection ({text})";
         }
 
         Options CreateOptions()
@@ -124,27 +253,44 @@ namespace MTD
 
             if (settings.UseTls)
             {
-                // The same trust policy as DDS: any server certificate is accepted.
-                options.TLSRemoteCertificationValidationCallback = (sender, certificate, chain, errors) => true;
+                // Called for the first connection and for every reconnection.
+                options.TLSRemoteCertificationValidationCallback = (sender, certificate, chain, errors) =>
+                {
+                    bool accepted = MtdTlsTrust.Accepts(certificate, errors, settings.Host, settings.AllowUntrustedCertificate, settings.TrustedCertificateFolder, out string problem);
+                    certificateProblem = problem;
+                    certificateWasChecked = true;
+                    return accepted;
+                };
             }
 
             options.DisconnectedEventHandler = (sender, args) =>
             {
-                isUp = false;
-                lastError = "connection lost";
-                Debug.Log("MTD: NATS connection lost");
+                lock (gate)
+                {
+                    if (disposed || !ReferenceEquals(connection, args.Conn)) return;
+                    isUp = false;
+                    lastError = "connection lost";
+                }
+
+                Log("MTD: NATS connection lost");
             };
             options.ReconnectedEventHandler = (sender, args) =>
             {
-                isUp = true;
-                lastError = null;
+                lock (gate)
+                {
+                    if (disposed || !ReferenceEquals(connection, args.Conn)) return;
+                    isUp = true;
+                    lastError = null;
+                }
+
+                lock (loggedWhileUnsettled) loggedWhileUnsettled.Clear();
                 Debug.Log("MTD: NATS connection re-established");
             };
-            options.ClosedEventHandler = (sender, args) =>
+            options.AsyncErrorEventHandler = (sender, args) =>
             {
-                isUp = false;
-                if (!disposed) Debug.Log("MTD: NATS connection closed");
+                Debug.Log($"MTD: NATS reported an error: {args.Error}");
             };
+            options.ClosedEventHandler = (sender, args) => OnClosed(args.Conn, args.Error);
 
             return options;
         }
@@ -161,7 +307,8 @@ namespace MTD
             }
         }
 
-        // The NATS client restores its own subscriptions after a reconnect.
+        // The NATS client restores its own subscriptions after it reconnects. After the server closes a connection,
+        // ConnectUntilUp makes them again on the new one.
         void SubscribeNow(IConnection target, string subject, MtdMessageHandler handler)
         {
             Task.Run(() =>
@@ -180,11 +327,11 @@ namespace MTD
                             Debug.Log($"MTD: error handling NATS message on {args.Message.Subject}: {exception}");
                         }
                     });
-                    Debug.Log($"MTD: subscribed to NATS subject {subject}");
+                    Log($"MTD: subscribed to NATS subject {subject}");
                 }
                 catch (Exception exception)
                 {
-                    Debug.Log($"MTD: could not subscribe to NATS subject {subject}: {exception.Message}");
+                    Log($"MTD: could not subscribe to NATS subject {subject}: {exception.Message}");
                 }
             });
         }

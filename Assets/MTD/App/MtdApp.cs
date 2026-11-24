@@ -112,7 +112,7 @@ namespace MTD
 
             if (transport != null)
             {
-                transport.Subscribe(MtdTopics.TableSummaryFilter(config.tConnect.siteName), queue.PostLatest);
+                transport.Subscribe(MtdTopics.TableSummaryFilter(config.tConnect.siteName), queue.PostMessage);
                 transport.Start();
                 tConnectClient?.Start();
             }
@@ -151,6 +151,7 @@ namespace MTD
                 Username = config.tConnect.username,
                 Password = config.tConnect.password,
                 UseTls = config.tConnect.useTLS,
+                AllowUntrustedCertificate = config.tConnect.allowUntrustedCertificate,
             };
 
             if (config.tConnect.useNats)
@@ -199,6 +200,11 @@ namespace MTD
 
             double now = Now;
             queue.Drain(OnSummary);
+            if (queue.DroppedMessages > 0)
+            {
+                ReportOnce($"MTD stopped processing messages for a while, and the oldest ones waiting were let go (limit {MainThreadQueue.DefaultMessageLimit}).");
+            }
+
             registry.Tick(now);
 
             if (registry.MembershipVersion != seenRegistryVersion || tableListSource.Version != seenSourceVersion)
@@ -224,16 +230,10 @@ namespace MTD
         // A table summary, now on the main thread.
         void OnSummary(string topic, byte[] payload)
         {
-            if (!MtdJson.TryDeserialize(payload, out MtdTableSummaryMessage message, out string error))
-            {
-                ReportOnce($"Ignored an unreadable summary on {topic}: {error}");
-                return;
-            }
-
-            TableSnapshot snapshot = SnapshotParser.Parse(message);
+            TableSnapshot snapshot = SummaryReader.Read(topic, payload, out MtdTableSummaryMessage message, out string problem);
             if (snapshot == null)
             {
-                ReportOnce($"Ignored a summary with no table ID on {topic}");
+                ReportOnce(problem);
                 return;
             }
 
@@ -245,6 +245,11 @@ namespace MTD
             if (snapshot.Family == GameFamily.Unsupported || snapshot.Family == GameFamily.Blackjack)
             {
                 ReportOnce($"Table {snapshot.TableName}{snapshot.TableNumber} is a {snapshot.GameType} table, which MTD does not show.");
+            }
+
+            if (snapshot.CurrentResultUnreadable)
+            {
+                ReportOnce($"Table {snapshot.TableName}{snapshot.TableNumber} sent a latest result MTD cannot read (\"{snapshot.UnreadableCurrentResult}\"). Its current result is shown as unavailable.");
             }
 
             TableChange change = registry.Apply(snapshot, Now);
@@ -288,7 +293,11 @@ namespace MTD
             {
                 details.Append(transport.Name).Append(' ').Append(config.tConnect.url).Append(':').Append(config.EffectivePort)
                     .Append(transport.Connected ? "  connected" : "  NOT connected");
-                if (!transport.Connected && transport.LastError != null) details.Append(" (").Append(transport.LastError).Append(')');
+                if (config.tConnect.useTLS) details.Append(config.tConnect.allowUntrustedCertificate ? ", TLS with the certificate NOT checked" : ", TLS");
+
+                // Shown whether or not the connection is up: a broker can be reachable and still refuse the subscription.
+                string transportProblem = transport.LastError;
+                if (transportProblem != null) details.Append(" (").Append(transportProblem).Append(')');
             }
 
             if (tConnectClient != null)
@@ -322,9 +331,17 @@ namespace MTD
                 return "Not connected. Press C to open the Configuration Menu.";
             }
 
+            string transportProblem = transport.LastError;
             if (!transport.Connected)
             {
-                return $"Connecting to {transport.Name} at {config.tConnect.url}:{config.EffectivePort}";
+                string connecting = $"Connecting to {transport.Name} at {config.tConnect.url}:{config.EffectivePort}";
+                return transportProblem == null ? connecting : $"{connecting}\n{Capitalise(transportProblem)}";
+            }
+
+            // Connected, but the broker will not let this display have what it asked for.
+            if (transportProblem != null)
+            {
+                return $"Connected to {transport.Name}, but {transportProblem}";
             }
 
             if (tConnectClient != null)
@@ -345,6 +362,11 @@ namespace MTD
             }
 
             return "Waiting for tables";
+        }
+
+        static string Capitalise(string text)
+        {
+            return string.IsNullOrEmpty(text) ? text : char.ToUpperInvariant(text[0]) + text.Substring(1);
         }
     }
 }

@@ -33,6 +33,7 @@ namespace MTD
             public string password = "";
             public string siteName = ""; // MQTT only. NATS subjects carry no site name.
             public bool useTLS;
+            public bool allowUntrustedCertificate; // With TLS: accept the broker's certificate without checking it.
             public bool useNats = true;
             public string mtdName = "MTD 01"; // The name this display registers under with T-Connect.
             public string deviceId = ""; // Made once, on first run, and then kept.

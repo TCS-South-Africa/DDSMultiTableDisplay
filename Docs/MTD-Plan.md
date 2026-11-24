@@ -179,9 +179,10 @@ Because the widget prefabs hang off the layout, the same UI can use tall column 
 | `T-Connect\|Connect` | checkbox | off | |
 | `T-Connect\|URL` | text | | |
 | `T-Connect\|Port` | number | blank | Blank means 4222 for NATS, 1883 for MQTT, as in DDS. |
-| `T-Connect\|Username`, `T-Connect\|Password` | text | | Stored in plain text, as in DDS. |
+| `T-Connect\|Username`, `T-Connect\|Password` | text | | Stored in plain text, as in DDS. The menu draws the password as asterisks. |
 | `T-Connect\|Site Name` | text | blank | MQTT only. Lower-cased; blank means `testsite`. |
-| `T-Connect\|TLS` | checkbox | off | Accepts any server certificate, the same policy as DDS. |
+| `T-Connect\|TLS` | checkbox | off | Encrypts the connection and checks the broker's certificate. See "TLS trust" below. |
+| `T-Connect\|Allow Untrusted Certificate` | checkbox | off | TLS only. Skips the certificate check, which is what DDS always does. |
 | `T-Connect\|Use NATS` | checkbox | on | Off means MQTT. |
 | `T-Connect\|MTD Name` | text | `MTD 01` | The name this display registers under. |
 | `T-Connect\|Device ID` | read-only | generated | See assumption A3. |
@@ -196,6 +197,14 @@ Because the widget prefabs hang off the layout, the same UI can use tall column 
 | `Switching\|Mode` | dropdown | Pages | Pages or Slot By Slot. |
 | `Switching\|Dwell Time (s)` | number | 120 | |
 | `Switching\|Slot Swap Interval (s)` | number | 5 | Slot By Slot only. |
+
+**TLS trust.** With TLS on, MTD goes on talking to a broker only if its certificate passes one of these, in `MtdTlsTrust`, which both transports use:
+
+1. Windows trusts it and it is for the host in `T-Connect|URL` (a name or an IP address in the certificate).
+2. It is for that host and is in `C:\tcs\mtd\TrustedCertificates`, or was issued by a root certificate in that folder. This is for a broker that uses the site's own certificate authority, as the T-Connect server's sample NATS and Mosquitto configurations do: copy the authority's certificate (`.pem`, `.crt`, `.cer` or `.der`) into the folder. The folder is read at every connection attempt, so no restart is needed.
+3. `T-Connect|Allow Untrusted Certificate` is ticked. The connection is still encrypted, but MTD cannot tell which broker it reached, and the status line says "certificate NOT checked".
+
+A refusal is shown on the display with the reason. This is stricter than DDS, which accepts any certificate.
 
 **The menu.** A new `MtdConfigurationMenu` script of a few hundred lines, not a port of DDS's script. It keeps what makes DDS's menu recognisable:
 
@@ -353,17 +362,17 @@ Built on 24 November 2026 on branch `pass-1-backend`, one commit per step. `main
 
 ### What was not checked
 
-- **MQTT.** `MqttMtdTransport` compiles and follows DDS's `MqttManagerLite`, but there is no MQTT 5 broker on this machine, so it has never connected to anything.
+- **MQTT.** `MqttMtdTransport` compiles and follows DDS's `MqttManagerLite`, but there is no MQTT 5 broker on this machine, so it has never connected to anything. *(Since checked against the MQTT library's own broker: section 11.)*
 - **A real T-Connect server.** Registration and the table list were exercised only against the test's stand-in, which was written from the October 2026 server snapshot.
 - **A real DDS table.** DDS does not publish the summary yet.
-- **TLS**, on either transport.
+- **TLS**, on either transport. *(Since checked against local servers: section 11.)*
 - **A standalone build.** Everything ran in the Editor.
 - **Keyboard and mouse by hand.** The CLI's key simulation does not reach the Editor's play mode, so the **C** key was exercised by queueing an Input System event, and the controls through their own change events. Nobody has clicked through the menu with a mouse.
 
 ### Where the build differs from this plan
 
 - **Applying a configuration rebuilds in place** instead of reloading the scene (section 3.5 is updated).
-- **A new result is recognised from the shape of the result list**, not from a change of `GameId` (contract section 6 is updated). This does not depend on DDS reporting the right game's ID.
+- **A new result is recognised from the shape of the result list** before `GameId` is consulted (contract section 6). Section 11 describes the rule as it now stands.
 - **The table list is read two ways**: by a Key-Value watch, and by a direct read every 30 seconds in case the watch stops silently.
 - **The table timeout cannot be set below 20 seconds.** A value shorter than the heartbeat made healthy tables drop out.
 - **`Display|Demo Tables` was added** so Demo Mode can be run with any number of tables.
@@ -381,3 +390,50 @@ A new MTD UI is a folder of prefabs plus two assets, with no change to the code 
 2. A layout prefab per orientation and slot count: a Canvas with an `MtdLayout` listing its slots and widget prefabs, and optionally an `MtdStatusView` and an empty-slot prefab.
 3. An `MtdUiDefinition` asset listing the layouts, in a `Resources` folder.
 4. An `MtdUiCatalog` asset at `Resources/MtdUis/MtdUiCatalog` with an entry pointing at the definition. With a blank `Display|MTD UI` setting, the first catalog entry is what loads.
+
+## 11. Review fixes after Pass 1
+
+Made on 24 November 2026, on the same branch, in answer to a review of the Pass 1 code. Eight findings were fixed. One more problem turned up while checking them and was fixed too (the last row).
+
+| Finding | What MTD does now | Where |
+| --- | --- | --- |
+| A summary could update the wrong table: a message on table A's topic naming table B was applied to B. | The table ID in the topic must equal `TableId` in the payload, or the message is ignored and logged once. | `SummaryReader`, `MtdTopics.TryGetSummaryTableId` |
+| An unreadable current result promoted the result before it to current. | The first result row is never dropped. If it cannot be read, the snapshot has no current result and says so, and the widget shows it as unavailable. Unreadable rows further down are still left out. | `SnapshotParser.ReadResults`, `TableSnapshot` |
+| The T-Connect table list could go back to an older revision when the watch and the 30-second read raced. | The revision is compared on the main thread at the moment a list is put in force, not before it is queued. | `TConnectMtdClient.ApplyTableList` |
+| A correction could be taken for a new result (`[7, 11, 7]` to `[9, 11, 7]`). | The list is read both ways, as results added and as results edited, and the reading that needs fewer changes wins. `GameId` settles a draw. Contract section 6 has the rule. | `TableRegistry.ClassifyResultChange` |
+| A newer summary could be thrown away before the registry saw it, when an older one arrived after it in the same frame. | The queue hands over every message in arrival order and the registry compares event times. Only a main thread that has stopped for a long time loses anything, and then the oldest arrivals (limit 4096). | `MainThreadQueue` |
+| MQTT reported a healthy connection after the broker refused the subscription. | The broker's answer to each subscription is read. A refusal is shown on the display while the connection is up, and the subscription is retried every 5 seconds, so correcting the broker's access rules is enough. | `MqttMtdTransport` |
+| Recovering a damaged configuration overwrote the last-known-good copy with the damaged file. | A file is kept as last-known-good only if it reads back correctly. Repairing the main file leaves the backup alone. | `MtdConfigurationStore.Save` |
+| The password was readable in the menu, and TLS accepted any certificate. | The password is drawn as asterisks. Certificates are checked: see "TLS trust" in section 3.5. | `MtdConfigurationMenu`, `MtdTlsTrust` |
+| Found while checking: with NATS, a refused subscription left the display on "connection lost" for good. The NATS client closes its connection when the server reports an error, and never reopens a closed one. | The reason the server gave is shown, and the transport connects again from scratch every 5 seconds and makes its subscriptions again. The T-Connect client makes a new Key-Value watch when it sees the connection was replaced. | `NatsMtdTransport.OnClosed`, `TConnectMtdClient.FollowTableList` |
+
+Two smaller things changed along the way. A table list whose revision goes backwards is taken as the server's current list once two direct reads in a row report it, which is what a bucket deleted and made again on the server looks like. And the debug status view no longer parses its text, because `C:\tcs` was being drawn with a tab in it.
+
+### What Pass 2 needs to know
+
+- **A snapshot's results are `Current` and `History`**, not one `Results` list. `Current` is null when the table has no results, and also when `CurrentResultUnreadable` is true. In the second case draw the current result as unavailable, never `History[0]`, and do not play a win animation for it even though the change is `NewResult`. `DebugTableWidget` shows the pattern.
+- **Status text is plain text.** It can hold a file path or words from a broker, and the headline can be two lines. Turn off rich text and escape-sequence parsing on the text components that show it.
+- **`TableChange.NewResult` can arrive more than once in a frame** for one table, because every message now reaches the registry.
+
+### What was checked
+
+| Check | Result |
+| --- | --- |
+| Edit-mode tests | 206 pass (157 before). New: wrong-table and off-topic messages, unreadable first rows, the correction and new-result cases with and without game IDs, queue order and overflow, table-list revisions in every order, configuration recovery twice in a row, the certificate decision, and MQTT. |
+| MQTT against a broker | 3 of those tests run the transport against the MQTT library's own MQTT 5 broker, started inside the test on a loopback port: a summary published the way DDS would arrives; a refused subscription is reported and recovers once allowed; a missing broker is reported. This is the first time the MQTT transport has connected to anything. |
+| Live NATS tests | 8 pass (5 before) against nats-server 2.15.3. New: a denied subscription is reported and retried, an allowed one on the same login is not, and the table list is followed after the bucket is deleted and made again. The denied-subscription tests need a second server: `nats-server -c Assets/MTD/Tests/Editor/Samples/nats-live-restricted.conf`. |
+| TLS, one-off | Against local nats-server instances with certificates from a test authority: refused when nothing trusts the certificate; accepted with the authority's certificate in the trusted folder, by host name and by IP address; accepted without a restart when that file was copied in while MTD was retrying; refused when the certificate was for another host, even from the trusted authority; accepted with Allow Untrusted Certificate. The same refused, trusted and allowed cases passed for MQTT against the library's broker with TLS. These used private keys, so they are not in the repository. Unity was also confirmed to accept a publicly trusted certificate and to report a wrong host name. |
+| In the app | Demo Mode as before. Against a local NATS server: a forged summary left the other table's widget unchanged and was logged; an unreadable latest result showed as "?" with the previous result below it. The display showed the reason for a denied NATS subscription, a refused MQTT subscription (and cleared it when the broker allowed it), and an untrusted certificate (and connected when the authority's certificate was copied into `C:\tcs\mtd\TrustedCertificates`). The menu drew the password as asterisks and Cancel discarded a typed one. |
+
+### What was not checked
+
+- **A real T-Connect server, a real DDS table, a standalone build, and the menu by hand**: as in section 10.
+- **A certificate trusted through Windows' own store, on a broker.** Unity reported no fault for a public web site's certificate, which is the same check, but no broker with such a certificate was available.
+- **TLS against a real T-Connect broker's certificate.**
+- **Mosquitto, RabbitMQ or any MQTT broker other than the library's own.** Some brokers accept a subscription and then deliver nothing when an access rule forbids the topic. MTD cannot tell that from a quiet site.
+- **The new Key-Value watch after NATS replaces a closed connection.** The reconnecting and resubscribing were tested; the watch being made again was not. The 30-second direct read keeps the table list current either way.
+
+### Seen and left alone
+
+- **Connecting to the name `localhost` over NATS fails under Unity** when the server listens on IPv4 only. The name resolves to the IPv6 loopback address first and the client does not fall back to the IPv4 one. `127.0.0.1` works. DDS uses the same client.
+- **The password is stored in plain text** in `MtdConfig.json`, as it is in DDS.

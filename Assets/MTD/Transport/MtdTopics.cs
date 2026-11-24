@@ -16,6 +16,8 @@ namespace MTD
         public const string TableListBucket = "mtd-table-list";
 
         const string root = "tcsjh";
+        const string tableSegment = "table";
+        const string summarySubtopic = "mtdsummary";
 
         // DDS lower-cases the site name and falls back to "testsite"; MTD must build the same topic.
         public static string NormaliseSiteName(string siteName)
@@ -26,13 +28,30 @@ namespace MTD
 
         public static string TableSummary(string siteName, Guid tableId)
         {
-            return $"{root}/{NormaliseSiteName(siteName)}/table/{tableId}/mtdsummary";
+            return $"{root}/{NormaliseSiteName(siteName)}/{tableSegment}/{tableId}/{summarySubtopic}";
         }
 
         // Every table's summary.
         public static string TableSummaryFilter(string siteName)
         {
-            return $"{root}/{NormaliseSiteName(siteName)}/table/+/mtdsummary";
+            return $"{root}/{NormaliseSiteName(siteName)}/{tableSegment}/+/{summarySubtopic}";
+        }
+
+        // The table a summary was published for, read from where it arrived. Takes either form a transport hands
+        // over: tcsjh/{site}/table/{TableId}/mtdsummary from MQTT, tcsjh.table.{TableId}.mtdsummary from NATS.
+        public static bool TryGetSummaryTableId(string topic, out Guid tableId)
+        {
+            tableId = Guid.Empty;
+            if (string.IsNullOrEmpty(topic)) return false;
+
+            string[] segments = topic.Split('/', '.');
+            int last = segments.Length - 1;
+            return last >= 3
+                && segments[0] == root
+                && segments[last] == summarySubtopic
+                && segments[last - 2] == tableSegment
+                && Guid.TryParseExact(segments[last - 1], "D", out tableId)
+                && tableId != Guid.Empty;
         }
 
         public static string TableListKey(Guid displayId)

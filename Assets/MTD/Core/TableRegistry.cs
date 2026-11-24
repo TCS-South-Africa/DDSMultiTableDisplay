@@ -9,7 +9,7 @@ namespace MTD
     {
         None, // The snapshot was not accepted (it was older than the one already held).
         Added, // A table MTD was not showing: never seen before, or back after going quiet.
-        NewResult, // One or more results were added at the top of the list.
+        NewResult, // One or more results were added at the top of the list. The newest may be one MTD cannot read.
         Corrected, // The result list changed in any other way: an edit, a removal, a cleared history.
         Updated, // Same results, but something else a widget draws changed (limits, colour, statistics...).
         Heartbeat, // Nothing visible changed. The table is simply still there.
@@ -119,26 +119,56 @@ namespace MTD
 
         static TableChange Classify(TableSnapshot previous, TableSnapshot current)
         {
-            IReadOnlyList<string> oldKeys = previous.ResultKeys;
-            IReadOnlyList<string> newKeys = current.ResultKeys;
-
-            if (!oldKeys.SequenceEqual(newKeys))
-            {
-                return IsOldListMovedDown(oldKeys, newKeys) ? TableChange.NewResult : TableChange.Corrected;
-            }
+            if (!previous.ResultKeys.SequenceEqual(current.ResultKeys)) return ClassifyResultChange(previous, current);
 
             return previous.DisplaySignature == current.DisplaySignature ? TableChange.Heartbeat : TableChange.Updated;
         }
 
-        // True when the new list is the old list with one or more results added in front, allowing for old results
-        // falling off the end of a list that is at its size limit. The game ID is deliberately not consulted: the
-        // shape of the list is enough, and it does not depend on DDS reporting the ID of the right game.
-        static bool IsOldListMovedDown(IReadOnlyList<string> oldKeys, IReadOnlyList<string> newKeys)
+        // The result list changed: was a result added, or was the list edited?
+        //
+        // Two readings are weighed. "Added": the old list reappears some places further down the new one, so that
+        // many results are new. "Edited": the lists are the same length and differ in some places, so that many
+        // results were changed where they stood. Whichever reading needs fewer changes wins. [7, 11, 7] becoming
+        // [9, 11, 7] is one edit or two additions, so it is a correction; a full history moving down one place is
+        // one addition or a list of edits, so it is a new result.
+        //
+        // The game ID only settles a draw (repeated values at the top of the list can make both readings cost the
+        // same): the same game cannot have produced a new result. Deciding by shape first means a publisher that
+        // reports the wrong game's ID still cannot make a correction animate, or stop a new result from animating.
+        static TableChange ClassifyResultChange(TableSnapshot previous, TableSnapshot current)
         {
-            if (newKeys.Count == 0) return false;
-            if (oldKeys.Count == 0) return true;
-            if (newKeys.Count < oldKeys.Count) return false; // Shorter means results were removed.
+            IReadOnlyList<string> oldKeys = previous.ResultKeys;
+            IReadOnlyList<string> newKeys = current.ResultKeys;
 
+            if (newKeys.Count < oldKeys.Count) return TableChange.Corrected; // Results were removed, or the history was cleared.
+            if (oldKeys.Count == 0) return TableChange.NewResult;
+
+            bool gameIdsKnown = previous.GameId != Guid.Empty && current.GameId != Guid.Empty;
+            bool sameGame = gameIdsKnown && previous.GameId == current.GameId;
+            bool newGame = gameIdsKnown && previous.GameId != current.GameId;
+
+            // With a new game, every result having been replaced is still a possible "added" reading: on a list
+            // that holds only the current result, that is what each new result looks like.
+            int added = CountAddedInFront(oldKeys, newKeys, allowNoOverlap: newGame);
+            if (added == 0) return TableChange.Corrected;
+
+            if (newKeys.Count != oldKeys.Count) return TableChange.NewResult; // The list grew, so "edited" is not a reading.
+
+            int edited = 0;
+            for (int i = 0; i < newKeys.Count; i++)
+            {
+                if (newKeys[i] != oldKeys[i]) edited++;
+            }
+
+            if (added != edited) return added < edited ? TableChange.NewResult : TableChange.Corrected;
+            return sameGame ? TableChange.Corrected : TableChange.NewResult;
+        }
+
+        // How many results were put in front of the old list to make the new one, allowing for old results falling
+        // off the end of a list that is at its size limit. The smallest such number, or 0 when the old list does not
+        // reappear further down. The new list is never shorter than the old one here, and neither is empty.
+        static int CountAddedInFront(IReadOnlyList<string> oldKeys, IReadOnlyList<string> newKeys, bool allowNoOverlap)
+        {
             for (int added = 1; added < newKeys.Count; added++)
             {
                 int overlap = newKeys.Count - added;
@@ -150,10 +180,10 @@ namespace MTD
                     matches = newKeys[added + i] == oldKeys[i];
                 }
 
-                if (matches) return true;
+                if (matches) return added;
             }
 
-            return false;
+            return allowNoOverlap ? newKeys.Count : 0;
         }
     }
 }

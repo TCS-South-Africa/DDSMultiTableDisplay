@@ -6,8 +6,13 @@ namespace MTD
 {
     // Turns a summary message into a snapshot. Bad individual values (an unknown pocket, an unreadable colour) are
     // dropped instead of failing the whole message, because one odd entry should not blank a table's widget.
+    // The one exception is the first result row: see ReadResults.
     public static class SnapshotParser
     {
+        const int maxUnreadableTextLength = 24;
+
+        delegate bool ResultReader<T>(MtdResultMessage row, out T result);
+
         // Returns null only when the message cannot identify a table.
         public static TableSnapshot Parse(MtdTableSummaryMessage message)
         {
@@ -52,23 +57,58 @@ namespace MTD
 
         static RouletteSnapshot ParseRoulette(MtdTableSummaryMessage message, RouletteVariant variant)
         {
-            List<RouletteResult> results = new List<RouletteResult>();
-            if (message.Results != null)
-            {
-                foreach (MtdResultMessage entry in message.Results)
-                {
-                    if (entry == null || !RoulettePocket.TryParse(entry.Result, out RoulettePocket pocket)) continue;
-                    results.Add(new RouletteResult(pocket, entry.Multiplier ?? 0, MtdColour.ParseOrNull(entry.MultiplierColour)));
-                }
-            }
+            ReadResults(message.Results, ReadRouletteResult, out RouletteResult? current, out string unreadableCurrent, out List<RouletteResult> history);
 
             return new RouletteSnapshot
             {
                 Variant = variant,
-                Results = results,
+                Current = current,
+                UnreadableCurrentResult = unreadableCurrent,
+                History = history,
                 HotNumbers = ParsePockets(message.HotNumbers),
                 ColdNumbers = ParsePockets(message.ColdNumbers),
             };
+        }
+
+        static bool ReadRouletteResult(MtdResultMessage row, out RouletteResult result)
+        {
+            result = default;
+            if (!RoulettePocket.TryParse(row.Result, out RoulettePocket pocket)) return false;
+
+            result = new RouletteResult(pocket, row.Multiplier ?? 0, MtdColour.ParseOrNull(row.MultiplierColour));
+            return true;
+        }
+
+        // The first row is the table's current result, and it is the one row that is never dropped. If it cannot be
+        // read, the snapshot has no current result and says why, so that the result before it is not shown as the
+        // latest. An unreadable row further down is dropped, which only shortens the history.
+        static void ReadResults<T>(List<MtdResultMessage> rows, ResultReader<T> read, out T? current, out string unreadableCurrent, out List<T> history)
+            where T : struct
+        {
+            current = null;
+            unreadableCurrent = null;
+            history = new List<T>();
+            if (rows == null) return;
+
+            for (int i = 0; i < rows.Count; i++)
+            {
+                T result = default;
+                bool readable = rows[i] != null && read(rows[i], out result);
+
+                if (i > 0)
+                {
+                    if (readable) history.Add(result);
+                }
+                else if (readable)
+                {
+                    current = result;
+                }
+                else
+                {
+                    string text = (rows[i]?.Result ?? "").Trim();
+                    unreadableCurrent = text.Length > maxUnreadableTextLength ? text.Substring(0, maxUnreadableTextLength) : text;
+                }
+            }
         }
 
         static List<RoulettePocket> ParsePockets(List<string> labels)
@@ -86,21 +126,21 @@ namespace MTD
 
         static SicBoSnapshot ParseSicBo(MtdTableSummaryMessage message)
         {
-            List<SicBoResult> results = new List<SicBoResult>();
-            if (message.Results != null)
-            {
-                foreach (MtdResultMessage entry in message.Results)
-                {
-                    if (entry != null && SicBoResult.TryParse(entry.Result, out SicBoResult result)) results.Add(result);
-                }
-            }
+            ReadResults(message.Results, ReadSicBoResult, out SicBoResult? current, out string unreadableCurrent, out List<SicBoResult> history);
 
             return new SicBoSnapshot
             {
-                Results = results,
+                Current = current,
+                UnreadableCurrentResult = unreadableCurrent,
+                History = history,
                 HotTotals = ParseTotals(message.HotNumbers),
                 ColdTotals = ParseTotals(message.ColdNumbers),
             };
+        }
+
+        static bool ReadSicBoResult(MtdResultMessage row, out SicBoResult result)
+        {
+            return SicBoResult.TryParse(row.Result, out result);
         }
 
         // Three dice total 3 to 18.

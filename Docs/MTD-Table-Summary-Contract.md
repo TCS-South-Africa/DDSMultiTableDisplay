@@ -180,9 +180,15 @@ The heartbeat is also the liveness signal: MTD drops a table from the rotation w
 ## 6. Consumer rules (MTD)
 
 - Identity is `TableId`. `MTDTableNumber` is for ordering and for the server's records, not identity.
-- Keep the newest message per table. Ignore a message whose `EventTime` is older than the one already held.
+- A table may only describe itself. MTD ignores a message whose `TableId` is not the table ID in the topic it arrived on, so nothing that can publish on one table's topic can change another table's widget.
+- Keep the newest message per table. Ignore a message whose `EventTime` is older than the one already held. Every message is compared this way, in the order it arrived; MTD does not assume the last one to arrive is the newest.
 - Ignore unknown fields. Treat a missing optional field as absent, never as an error.
-- A new result is recognised from the result list, not from `GameId`: the list MTD already holds reappears one or more places further down the new list. Any other change to the list (an edited value, a removed result, a cleared history) is a correction. MTD does it this way so that a publisher sending the wrong game's ID cannot make every table animate at each Place Your Bets. `GameId` still identifies the game for anything that needs it.
+- `Results[0]` is the table's current result and is never replaced by an older one. If MTD cannot read it (an unknown pocket, a value that is not three dice), the widget shows the current result as unavailable and keeps the rest of the list as history. An unreadable entry further down the list is simply left out.
+- A new result is recognised from the result list first, and from `GameId` only when the list cannot decide:
+  - "Added" reading: the list MTD already holds reappears one or more places further down the new list. "Edited" reading: the lists are the same length and differ in some places. Whichever reading needs fewer changes wins. `[7, 11, 7]` becoming `[9, 11, 7]` is one edit or two additions, so it is a correction; a history moving down one place is a new result.
+  - When both readings need the same number of changes (repeated values at the top of the list, or a list that holds only the current result), an unchanged `GameId` means a correction and a changed one means a new result.
+  - A shorter list, or a cleared one, is a correction.
+  - MTD does it in this order so that a publisher sending the wrong game's ID can neither make a correction animate as a new result nor stop a new result from animating.
 - If `MTDColourSetting` does not parse, use the MTD UI's default colour.
 - On MQTT, a retained message is shown immediately, so a table that died within the last hour can appear for up to one timeout after MTD starts. Accepted for v1.
 

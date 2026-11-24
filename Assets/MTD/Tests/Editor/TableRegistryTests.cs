@@ -25,6 +25,83 @@ namespace MTD.Tests
             return registry.Apply(Snapshot(1, t0.AddSeconds(1), newResults), 1);
         }
 
+        static readonly Guid gameA = new Guid("aaaaaaaa-0000-4000-8000-00000000000a");
+        static readonly Guid gameB = new Guid("bbbbbbbb-0000-4000-8000-00000000000b");
+
+        // The same, with the game ID of each message chosen by the test. Guid.Empty stands for "DDS sent none".
+        static TableChange ChangeBetween(Guid oldGame, string[] oldResults, Guid newGame, string[] newResults)
+        {
+            MtdTableSummaryMessage oldMessage = TestSamples.Roulette(1, oldResults);
+            oldMessage.GameId = oldGame;
+            oldMessage.EventTime = t0;
+            MtdTableSummaryMessage newMessage = TestSamples.Roulette(1, newResults);
+            newMessage.GameId = newGame;
+            newMessage.EventTime = t0.AddSeconds(1);
+
+            TableRegistry registry = new TableRegistry(timeout);
+            registry.Apply(SnapshotParser.Parse(oldMessage), 0);
+            return registry.Apply(SnapshotParser.Parse(newMessage), 1);
+        }
+
+        // A result is edited, and the same number happens to appear further down. Read as "two results added" the
+        // lists also line up, which is how this used to be mistaken for a new spin.
+        [Test]
+        public void EditedTopResult_WithTheOldValueRepeatedFurtherDown_IsACorrection()
+        {
+            string[] before = { "7", "11", "7" };
+            string[] after = { "9", "11", "7" };
+
+            Assert.AreEqual(TableChange.Corrected, ChangeBetween(gameA, before, gameA, after), "Same game.");
+            Assert.AreEqual(TableChange.Corrected, ChangeBetween(gameA, before, gameB, after), "One edit explains it better than two additions, whatever the game ID says.");
+            Assert.AreEqual(TableChange.Corrected, ChangeBetween(Guid.Empty, before, Guid.Empty, after), "No game IDs.");
+        }
+
+        // One edit and one addition both explain these lists equally well. Only here does the game ID decide.
+        [Test]
+        public void WhenTheListsCanBeReadEitherWay_TheGameIdDecides()
+        {
+            string[] before = { "7", "7", "7" };
+            string[] after = { "9", "7", "7" };
+
+            Assert.AreEqual(TableChange.Corrected, ChangeBetween(gameA, before, gameA, after), "The same game cannot have produced a new result.");
+            Assert.AreEqual(TableChange.NewResult, ChangeBetween(gameA, before, gameB, after));
+            Assert.AreEqual(TableChange.NewResult, ChangeBetween(Guid.Empty, before, Guid.Empty, after), "Without game IDs, a new result is far the likelier.");
+        }
+
+        [Test]
+        public void HistoryMovedDown_IsANewResult_EvenIfThePublisherRepeatsTheGameId()
+        {
+            Assert.AreEqual(TableChange.NewResult, ChangeBetween(gameA, new[] { "17", "4", "9" }, gameA, new[] { "32", "17", "4" }));
+            Assert.AreEqual(TableChange.NewResult, ChangeBetween(gameA, new[] { "17", "4" }, gameA, new[] { "32", "17", "4" }));
+        }
+
+        [Test]
+        public void ListHoldingOnlyTheCurrentResult_FollowsTheGameId()
+        {
+            Assert.AreEqual(TableChange.NewResult, ChangeBetween(gameA, new[] { "7" }, gameB, new[] { "9" }));
+            Assert.AreEqual(TableChange.Corrected, ChangeBetween(gameA, new[] { "7" }, gameA, new[] { "9" }));
+            Assert.AreEqual(TableChange.Corrected, ChangeBetween(Guid.Empty, new[] { "7" }, Guid.Empty, new[] { "9" }));
+        }
+
+        [Test]
+        public void UnreadableNewResult_IsANewResult_AndItsRepairIsACorrection()
+        {
+            TableRegistry registry = new TableRegistry(timeout);
+            registry.Apply(Snapshot(1, t0, "24", "5"), 0);
+
+            MtdTableSummaryMessage unreadable = TestSamples.Roulette(1, "bad", "24", "5");
+            unreadable.EventTime = t0.AddSeconds(1);
+            Assert.AreEqual(TableChange.NewResult, registry.Apply(SnapshotParser.Parse(unreadable), 1));
+
+            Assert.IsTrue(registry.TryGet(TestSamples.TableId(1), out TableState state));
+            Assert.IsNull(((RouletteSnapshot)state.Snapshot).Current, "The table has a new result MTD cannot show; 24 is no longer the latest.");
+
+            MtdTableSummaryMessage repaired = TestSamples.Roulette(1, "17", "24", "5");
+            repaired.GameId = unreadable.GameId;
+            repaired.EventTime = t0.AddSeconds(2);
+            Assert.AreEqual(TableChange.Corrected, registry.Apply(SnapshotParser.Parse(repaired), 2));
+        }
+
         [Test]
         public void FirstSnapshot_IsAdded()
         {

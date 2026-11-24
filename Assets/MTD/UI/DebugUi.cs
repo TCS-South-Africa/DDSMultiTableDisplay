@@ -106,6 +106,10 @@ namespace MTD
             headlineRect.offsetMax = new Vector2(-24, -12);
             view.headline = CreateText(headlineRect.gameObject, 40, TextAlignmentOptions.Center);
 
+            // Status text is plain text. It carries whatever a broker or a certificate said, so it is not parsed.
+            view.details.richText = false;
+            view.headline.richText = false;
+
             panel.gameObject.SetActive(false);
             return view;
         }
@@ -128,6 +132,7 @@ namespace MTD
             text.fontSize = size;
             text.alignment = alignment;
             text.richText = true;
+            text.parseCtrlCharacters = false; // Otherwise the "\t" in a path such as C:\tcs is drawn as a tab.
             text.raycastTarget = false;
             text.color = Color.white;
             return text;

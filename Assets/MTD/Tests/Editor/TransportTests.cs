@@ -83,8 +83,8 @@ namespace MTD.Tests
                 Assert.AreEqual(sampleSize, roulette.GetStatistic("Column1") + roulette.GetStatistic("Column2") + roulette.GetStatistic("Column3") + roulette.GetStatistic("Zero"));
                 Assert.AreEqual(8, roulette.HotNumbers.Count);
 
-                bool everyResultHasMultiplier = roulette.Results.All(result => result.HasMultiplier);
-                bool noResultHasMultiplier = roulette.Results.All(result => !result.HasMultiplier);
+                bool everyResultHasMultiplier = roulette.AllResults().All(result => result.HasMultiplier);
+                bool noResultHasMultiplier = roulette.AllResults().All(result => !result.HasMultiplier);
                 if (roulette.Variant == RouletteVariant.PowerReel) Assert.IsTrue(everyResultHasMultiplier);
                 if (roulette.Variant == RouletteVariant.Standard) Assert.IsTrue(noResultHasMultiplier);
             }
@@ -113,23 +113,63 @@ namespace MTD.Tests
         }
 
         [Test]
-        public void MainThreadQueue_KeepsOnlyTheNewestMessagePerKey()
+        public void MainThreadQueue_DeliversEveryMessageInArrivalOrder()
         {
             MainThreadQueue queue = new MainThreadQueue();
-            queue.PostLatest("table-1", new byte[] { 1 });
-            queue.PostLatest("table-2", new byte[] { 2 });
-            queue.PostLatest("table-1", new byte[] { 3 });
+            queue.PostMessage("table-1", new byte[] { 1 });
+            queue.PostMessage("table-2", new byte[] { 2 });
+            queue.PostMessage("table-1", new byte[] { 3 });
 
-            Dictionary<string, byte> received = new Dictionary<string, byte>();
-            queue.Drain((key, payload) => received[key] = payload[0]);
+            List<string> received = new List<string>();
+            queue.Drain((topic, payload) => received.Add($"{topic}:{payload[0]}"));
 
-            Assert.AreEqual(2, received.Count);
-            Assert.AreEqual(3, received["table-1"]);
-            Assert.AreEqual(2, received["table-2"]);
+            CollectionAssert.AreEqual(new[] { "table-1:1", "table-2:2", "table-1:3" }, received);
+            Assert.AreEqual(0, queue.DroppedMessages);
 
             int secondDrain = 0;
-            queue.Drain((key, payload) => secondDrain++);
+            queue.Drain((topic, payload) => secondDrain++);
             Assert.AreEqual(0, secondDrain, "Messages are delivered once.");
+        }
+
+        [Test]
+        public void MainThreadQueue_NotDrained_LetsGoOfTheOldestArrivals()
+        {
+            MainThreadQueue queue = new MainThreadQueue(messageLimit: 3);
+            for (byte i = 1; i <= 5; i++) queue.PostMessage("table-1", new[] { i });
+
+            List<byte> received = new List<byte>();
+            queue.Drain((topic, payload) => received.Add(payload[0]));
+
+            CollectionAssert.AreEqual(new byte[] { 3, 4, 5 }, received);
+            Assert.AreEqual(2, queue.DroppedMessages);
+        }
+
+        // The case the queue used to get wrong: it kept the last arrival per topic, so when a table's newer summary
+        // was overtaken by an older one inside a single frame, the registry was only ever shown the older one.
+        [Test]
+        public void NewerSummaryOvertakenByAnOlderOneInOneFrame_StillWins()
+        {
+            DateTimeOffset now = new DateTimeOffset(2026, 11, 24, 10, 0, 0, TimeSpan.Zero);
+            MtdTableSummaryMessage older = TestSamples.Roulette(1, "17", "4");
+            older.EventTime = now;
+            MtdTableSummaryMessage newer = TestSamples.Roulette(1, "32", "17", "4");
+            newer.EventTime = now.AddSeconds(1);
+
+            TableRegistry registry = new TableRegistry(35);
+            MainThreadQueue queue = new MainThreadQueue();
+            queue.PostMessage(TestSamples.Topic(1), TestSamples.Bytes(MtdJson.Serialize(older)));
+            queue.Drain((topic, payload) => registry.Apply(SummaryReader.Read(topic, payload, out _, out _), 0));
+
+            // One frame: the newer summary arrives first, then a late copy of the older one.
+            queue.PostMessage(TestSamples.Topic(1), TestSamples.Bytes(MtdJson.Serialize(newer)));
+            queue.PostMessage(TestSamples.Topic(1), TestSamples.Bytes(MtdJson.Serialize(older)));
+
+            List<TableChange> changes = new List<TableChange>();
+            queue.Drain((topic, payload) => changes.Add(registry.Apply(SummaryReader.Read(topic, payload, out _, out _), 1)));
+
+            CollectionAssert.AreEqual(new[] { TableChange.NewResult, TableChange.None }, changes);
+            Assert.IsTrue(registry.TryGet(TestSamples.TableId(1), out TableState state));
+            CollectionAssert.AreEqual(new[] { "32", "17", "4" }, state.Snapshot.ResultKeys);
         }
 
         [Test]
@@ -137,7 +177,7 @@ namespace MTD.Tests
         {
             MainThreadQueue queue = new MainThreadQueue();
             List<string> log = new List<string>();
-            queue.PostLatest("table-1", new byte[] { 1 });
+            queue.PostMessage("table-1", new byte[] { 1 });
             queue.Post(() => log.Add("first"));
             queue.Post(() => log.Add("second"));
 

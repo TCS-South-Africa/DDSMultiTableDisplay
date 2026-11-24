@@ -15,7 +15,8 @@
     "precompiledReferences": [
         "nunit.framework.dll",
         "Newtonsoft.Json.dll",
-        "NATS.Client.dll"
+        "NATS.Client.dll",
+        "MQTTnet.dll"
     ],
     "autoReferenced": false,
     "defineConstraints": [

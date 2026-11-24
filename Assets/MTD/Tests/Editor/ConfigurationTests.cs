@@ -66,6 +66,7 @@ namespace MTD.Tests
             data.tConnect.password = "secret";
             data.tConnect.siteName = "Crown";
             data.tConnect.useTLS = true;
+            data.tConnect.allowUntrustedCertificate = true;
             data.tConnect.useNats = false;
             data.tConnect.mtdName = "Pit 3 MTD";
             data.tables.tableListSource = TableListSourceKind.Discover;
@@ -91,6 +92,7 @@ namespace MTD.Tests
             Assert.AreEqual("secret", loaded.tConnect.password);
             Assert.AreEqual("Crown", loaded.tConnect.siteName);
             Assert.IsTrue(loaded.tConnect.useTLS);
+            Assert.IsTrue(loaded.tConnect.allowUntrustedCertificate);
             Assert.IsFalse(loaded.tConnect.useNats);
             Assert.AreEqual("Pit 3 MTD", loaded.tConnect.mtdName);
             Assert.AreEqual(data.DeviceId, loaded.DeviceId);
@@ -139,6 +141,50 @@ namespace MTD.Tests
             StringAssert.Contains("not json", File.ReadAllText(CorruptFile));
             Assert.AreEqual("Good", MtdConfigurationStore.Load(out source, folder).tConnect.mtdName);
             Assert.AreEqual(MtdConfigurationStore.LoadSource.File, source);
+        }
+
+        // Repairing the main file used to move the damaged file into the backup's place, so the one good copy was
+        // destroyed by the act of using it.
+        [Test]
+        public void RepairingADamagedFile_LeavesTheLastKnownGoodCopyIntact()
+        {
+            MtdConfigurationData data = MtdConfigurationStore.Load(out _, folder);
+            data.tConnect.mtdName = "Good";
+            MtdConfigurationStore.Save(data, folder);
+            data.tConnect.mtdName = "Newer";
+            MtdConfigurationStore.Save(data, folder);
+            string backupBefore = File.ReadAllText(BackupFile);
+
+            File.WriteAllText(MainFile, "{ this is not json");
+            MtdConfigurationStore.Load(out _, folder);
+
+            Assert.AreEqual(backupBefore, File.ReadAllText(BackupFile), "The backup must be the same good file as before the repair.");
+            StringAssert.DoesNotContain("not json", File.ReadAllText(BackupFile));
+
+            // A second failure before anything is saved again must still recover the device identity and settings.
+            File.WriteAllText(MainFile, "");
+            MtdConfigurationData recovered = MtdConfigurationStore.Load(out MtdConfigurationStore.LoadSource source, folder);
+
+            Assert.AreEqual(MtdConfigurationStore.LoadSource.Backup, source);
+            Assert.AreEqual("Good", recovered.tConnect.mtdName);
+            Assert.AreEqual(data.DeviceId, recovered.DeviceId);
+        }
+
+        [Test]
+        public void SavingOverADamagedFile_DoesNotKeepItAsLastKnownGood()
+        {
+            MtdConfigurationData data = MtdConfigurationStore.Load(out _, folder);
+            data.tConnect.mtdName = "First";
+            MtdConfigurationStore.Save(data, folder);
+            data.tConnect.mtdName = "Second";
+            MtdConfigurationStore.Save(data, folder);
+
+            File.WriteAllText(MainFile, "\0\0\0\0");
+            data.tConnect.mtdName = "Third";
+            MtdConfigurationStore.Save(data, folder);
+
+            StringAssert.Contains("Third", File.ReadAllText(MainFile));
+            StringAssert.Contains("First", File.ReadAllText(BackupFile));
         }
 
         [Test]

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Net.Sockets;
 using System.Text;
 using System.Threading;
 using NATS.Client;
@@ -16,12 +17,19 @@ namespace MTD.Tests
     //     nats-server -js -p 14222
     //
     // The port is deliberately not the default, so these tests can never talk to a real T-Connect broker.
+    //
+    // The two "restricted" tests need a second server that denies the summary subscription. They are skipped when it
+    // is not running:
+    //
+    //     nats-server -c Assets/MTD/Tests/Editor/Samples/nats-live-restricted.conf
     [Explicit("Needs a local nats-server: nats-server -js -p 14222")]
     [Category("Live")]
     public class NatsLiveTests
     {
         const string host = "127.0.0.1";
         const int port = 14222;
+        const int restrictedPort = 14223;
+        const string restrictedLogin = "mtd-live-test"; // User and password, from Samples/nats-live-restricted.conf.
 
         IConnection serverSide; // Plays DDS and the T-Connect server.
         NatsMtdTransport transport;
@@ -62,7 +70,7 @@ namespace MTD.Tests
         public void Summary_PublishedTheWayDdsWould_ReachesTheRegistry()
         {
             MainThreadQueue queue = new MainThreadQueue();
-            transport.Subscribe(MtdTopics.TableSummaryFilter("anysite"), queue.PostLatest);
+            transport.Subscribe(MtdTopics.TableSummaryFilter("anysite"), queue.PostMessage);
             Thread.Sleep(300); // Let the subscription reach the server.
 
             byte[] payload = TestSamples.ReadBytes("roulette-power-reel.json");
@@ -81,8 +89,9 @@ namespace MTD.Tests
                 queue.Drain((topic, bytes) =>
                 {
                     received++;
-                    Assert.IsTrue(MtdJson.TryDeserialize(bytes, out MtdTableSummaryMessage message, out string error), error);
-                    registry.Apply(SnapshotParser.Parse(message), 0);
+                    TableSnapshot snapshot = SummaryReader.Read(topic, bytes, out _, out string problem);
+                    Assert.IsNull(problem);
+                    registry.Apply(snapshot, 0);
                 });
                 return received > 0;
             }, 3), "No summary arrived.");
@@ -198,6 +207,94 @@ namespace MTD.Tests
             PutTableList(tableListBucket, displayId, tableA, tableB, tableC);
 
             Assert.IsTrue(WaitFor(() => { queue.Drain((k, v) => { }); return tableList.Count == 3; }, 5), "The changed table list never arrived.");
+        }
+
+        // The server's bucket is deleted and made again, so its revisions start over at 1 while the display holds a
+        // list with a higher revision. The display must end up on the new bucket's list and follow it from there.
+        [Test]
+        public void TConnectClient_FollowsItsTableList_AfterTheServerRecreatesTheBucket()
+        {
+            Guid displayId = Guid.NewGuid();
+            Guid tableA = TestSamples.TableId(1);
+            Guid tableB = TestSamples.TableId(2);
+            Guid tableC = TestSamples.TableId(3);
+
+            serverSide.SubscribeAsync(MtdTopics.AssignDeviceSubject, (sender, args) =>
+            {
+                DeviceAssignmentResponse response = new DeviceAssignmentResponse { TableId = displayId, TableName = "MTD 01", AssignmentCode = "OK", Status = AssignmentStatus.Assigned };
+                serverSide.Publish(args.Message.Reply, Encoding.UTF8.GetBytes(MtdJson.Serialize(response)));
+            });
+            serverSide.Flush(2000);
+
+            IKeyValue bucket = RecreateBucket(MtdTopics.TableListBucket);
+            PutTableList(bucket, displayId, tableA);
+            PutTableList(bucket, displayId, tableA, tableB);
+            PutTableList(bucket, displayId, tableA, tableB, tableC); // Revision 3.
+
+            MainThreadQueue queue = new MainThreadQueue();
+            TableIdListSource tableList = new TableIdListSource();
+            using TConnectMtdClient client = new TConnectMtdClient(transport, Guid.NewGuid(), "MTD 01", queue, tableList) { PingInterval = TimeSpan.FromMilliseconds(400) };
+            client.Start();
+            Assert.IsTrue(WaitFor(() => { queue.Drain((k, v) => { }); return tableList.Count == 3; }, 5), "The first list never arrived.");
+
+            bucket = RecreateBucket(MtdTopics.TableListBucket);
+            PutTableList(bucket, displayId, tableC); // Revision 1 of the new bucket.
+
+            Assert.IsTrue(WaitFor(() => { queue.Drain((k, v) => { }); return tableList.Count == 1; }, 8), "The display stayed on the old bucket's list.");
+
+            PutTableList(bucket, displayId, tableB, tableC);
+            Assert.IsTrue(WaitFor(() => { queue.Drain((k, v) => { }); return tableList.Count == 2; }, 8), "The display did not follow the new bucket.");
+        }
+
+        NatsMtdTransport RestrictedTransport()
+        {
+            try
+            {
+                using TcpClient probe = new TcpClient();
+                probe.Connect(host, restrictedPort);
+            }
+            catch (SocketException)
+            {
+                Assert.Ignore("The restricted nats-server is not running (see the top of this file).");
+            }
+
+            return new NatsMtdTransport(new MtdConnectionSettings { Host = host, Port = restrictedPort, Username = restrictedLogin, Password = restrictedLogin })
+            {
+                RetryInterval = TimeSpan.FromMilliseconds(500),
+                StableAfter = TimeSpan.FromSeconds(2),
+            };
+        }
+
+        // When the server denies a subscription, this NATS client's connection is closed for good. MTD must say why
+        // on the status display and keep connecting, so that granting the permission is all it takes to recover.
+        [Test]
+        public void SubscriptionTheServerDenies_IsReported_AndTheTransportKeepsTrying()
+        {
+            using NatsMtdTransport restricted = RestrictedTransport();
+            restricted.Subscribe(MtdTopics.TableSummaryFilter("anysite"), (topic, payload) => { });
+            restricted.Start();
+
+            Assert.IsTrue(WaitFor(() => (restricted.LastError ?? "").Contains("permissions violation"), 10), $"The denial was not reported: {restricted.LastError}");
+            StringAssert.Contains("tcsjh.table.*.mtdsummary", restricted.LastError);
+            int generation = restricted.ConnectionGeneration;
+
+            Assert.IsTrue(WaitFor(() => restricted.ConnectionGeneration >= generation + 3, 10), "It stopped trying to connect.");
+            StringAssert.Contains("permissions violation", restricted.LastError ?? "", "The reason must stay on show between attempts.");
+        }
+
+        [Test]
+        public void SubscriptionTheServerAllows_OnTheSameLogin_ReportsNothing()
+        {
+            using NatsMtdTransport restricted = RestrictedTransport();
+            restricted.Subscribe("tcsjh/anysite/table/+/somethingelse", (topic, payload) => { });
+            restricted.Start();
+
+            Assert.IsTrue(WaitFor(() => restricted.Connected, 10), restricted.LastError);
+            Thread.Sleep(1500);
+
+            Assert.IsTrue(restricted.Connected);
+            Assert.IsNull(restricted.LastError);
+            Assert.AreEqual(1, restricted.ConnectionGeneration, "The connection must not have been replaced.");
         }
 
         IKeyValue RecreateBucket(string bucket)

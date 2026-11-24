@@ -27,12 +27,12 @@ namespace MTD.Tests
             Assert.AreEqual("$10,000", snapshot.MaxBetText);
             Assert.AreEqual(new DateTimeOffset(2026, 11, 24, 10, 15, 30, 123, TimeSpan.Zero), snapshot.EventTime);
 
-            Assert.AreEqual(12, snapshot.Results.Count);
-            Assert.AreEqual("36", snapshot.Results[0].Pocket.Label);
-            Assert.AreEqual(RouletteColour.Red, snapshot.Results[0].Pocket.Colour);
-            Assert.AreEqual(RouletteColour.Black, snapshot.Results[2].Pocket.Colour); // 35
-            Assert.AreEqual(RouletteColour.Green, snapshot.Results[8].Pocket.Colour); // 0
-            Assert.IsFalse(snapshot.Results.Any(result => result.HasMultiplier));
+            Assert.AreEqual(12, snapshot.AllResults().Count);
+            Assert.AreEqual("36", snapshot.AllResults()[0].Pocket.Label);
+            Assert.AreEqual(RouletteColour.Red, snapshot.AllResults()[0].Pocket.Colour);
+            Assert.AreEqual(RouletteColour.Black, snapshot.AllResults()[2].Pocket.Colour); // 35
+            Assert.AreEqual(RouletteColour.Green, snapshot.AllResults()[8].Pocket.Colour); // 0
+            Assert.IsFalse(snapshot.AllResults().Any(result => result.HasMultiplier));
 
             CollectionAssert.AreEqual(new[] { "35", "14", "8", "22" }, snapshot.HotNumbers.Select(pocket => pocket.Label));
             CollectionAssert.AreEqual(new[] { "2", "17", "29", "00" }, snapshot.ColdNumbers.Select(pocket => pocket.Label));
@@ -49,15 +49,15 @@ namespace MTD.Tests
             RouletteSnapshot snapshot = (RouletteSnapshot)TestSamples.ReadSnapshot("roulette-xtra.json");
 
             Assert.AreEqual(RouletteVariant.Xtra, snapshot.Variant);
-            Assert.AreEqual(2, snapshot.Results.Count(result => result.HasMultiplier));
+            Assert.AreEqual(2, snapshot.AllResults().Count(result => result.HasMultiplier));
 
-            RouletteResult seven = snapshot.Results[6];
+            RouletteResult seven = snapshot.AllResults()[6];
             Assert.AreEqual("7", seven.Pocket.Label);
             Assert.AreEqual(100, seven.Multiplier);
             Assert.AreEqual(new Color32(0xC9, 0xA2, 0x27, 255), seven.MultiplierColour.Value);
 
-            Assert.AreEqual("00", snapshot.Results[8].Pocket.Label);
-            Assert.IsTrue(snapshot.Results[8].Pocket.IsZero);
+            Assert.AreEqual("00", snapshot.AllResults()[8].Pocket.Label);
+            Assert.IsTrue(snapshot.AllResults()[8].Pocket.IsZero);
         }
 
         [Test]
@@ -66,9 +66,9 @@ namespace MTD.Tests
             RouletteSnapshot snapshot = (RouletteSnapshot)TestSamples.ReadSnapshot("roulette-power-reel.json");
 
             Assert.AreEqual(RouletteVariant.PowerReel, snapshot.Variant);
-            Assert.AreEqual(5, snapshot.Results.Count);
-            Assert.IsTrue(snapshot.Results.All(result => result.HasMultiplier));
-            CollectionAssert.AreEqual(new[] { 50, 30, 20, 17, 60 }, snapshot.Results.Select(result => result.Multiplier));
+            Assert.AreEqual(5, snapshot.AllResults().Count);
+            Assert.IsTrue(snapshot.AllResults().All(result => result.HasMultiplier));
+            CollectionAssert.AreEqual(new[] { 50, 30, 20, 17, 60 }, snapshot.AllResults().Select(result => result.Multiplier));
         }
 
         [Test]
@@ -78,13 +78,13 @@ namespace MTD.Tests
 
             Assert.AreEqual(GameFamily.SicBo, snapshot.Family);
             Assert.AreEqual("SB", snapshot.TableName);
-            Assert.AreEqual(6, snapshot.Results.Count);
+            Assert.AreEqual(6, snapshot.AllResults().Count);
 
-            Assert.AreEqual(15, snapshot.Results[0].Total);
-            Assert.AreEqual(SicBoOutcome.Big, snapshot.Results[0].Outcome);
-            Assert.AreEqual(9, snapshot.Results[1].Total);
-            Assert.AreEqual(SicBoOutcome.Small, snapshot.Results[1].Outcome);
-            Assert.AreEqual(SicBoOutcome.Triple, snapshot.Results[2].Outcome);
+            Assert.AreEqual(15, snapshot.AllResults()[0].Total);
+            Assert.AreEqual(SicBoOutcome.Big, snapshot.AllResults()[0].Outcome);
+            Assert.AreEqual(9, snapshot.AllResults()[1].Total);
+            Assert.AreEqual(SicBoOutcome.Small, snapshot.AllResults()[1].Outcome);
+            Assert.AreEqual(SicBoOutcome.Triple, snapshot.AllResults()[2].Outcome);
 
             CollectionAssert.AreEqual(new[] { 10, 11, 9 }, snapshot.HotTotals);
             CollectionAssert.AreEqual(new[] { 4, 17, 5 }, snapshot.ColdTotals);
@@ -198,7 +198,7 @@ namespace MTD.Tests
 
             RouletteSnapshot snapshot = (RouletteSnapshot)SnapshotParser.Parse(message);
 
-            CollectionAssert.AreEqual(new[] { "17", "00" }, snapshot.Results.Select(result => result.Pocket.Label));
+            CollectionAssert.AreEqual(new[] { "17", "00" }, snapshot.AllResults().Select(result => result.Pocket.Label));
             CollectionAssert.AreEqual(new[] { "5", "12" }, snapshot.HotNumbers.Select(pocket => pocket.Label));
             Assert.IsNull(snapshot.Colour);
         }
@@ -213,9 +213,9 @@ namespace MTD.Tests
 
             RouletteSnapshot snapshot = (RouletteSnapshot)SnapshotParser.Parse(message);
 
-            Assert.IsFalse(snapshot.Results[0].HasMultiplier);
-            Assert.IsNull(snapshot.Results[0].MultiplierColour);
-            Assert.IsFalse(snapshot.Results[1].HasMultiplier);
+            Assert.IsFalse(snapshot.AllResults()[0].HasMultiplier);
+            Assert.IsNull(snapshot.AllResults()[0].MultiplierColour);
+            Assert.IsFalse(snapshot.AllResults()[1].HasMultiplier);
         }
 
         [Test]
@@ -226,10 +226,139 @@ namespace MTD.Tests
 
             RouletteSnapshot snapshot = (RouletteSnapshot)SnapshotParser.Parse(message);
 
-            Assert.AreEqual(0, snapshot.Results.Count);
+            Assert.AreEqual(0, snapshot.AllResults().Count);
             Assert.AreEqual(0, snapshot.HotNumbers.Count);
             Assert.AreEqual(0, snapshot.ColdNumbers.Count);
             Assert.AreEqual(0, snapshot.Statistics.Count);
+        }
+
+        [Test]
+        public void UnreadableFirstRouletteRow_LeavesNoCurrentResult_InsteadOfPromotingAnOlderOne()
+        {
+            RouletteSnapshot snapshot = (RouletteSnapshot)SnapshotParser.Parse(TestSamples.Roulette(3, "bad", "24", "5"));
+
+            Assert.IsNull(snapshot.Current, "24 is the result before the latest one. It must not be shown as the latest.");
+            Assert.IsTrue(snapshot.CurrentResultUnreadable);
+            Assert.AreEqual("bad", snapshot.UnreadableCurrentResult);
+            CollectionAssert.AreEqual(new[] { "24", "5" }, snapshot.History.Select(result => result.Pocket.Label));
+            CollectionAssert.AreEqual(new[] { "?bad", "24", "5" }, snapshot.ResultKeys);
+        }
+
+        [Test]
+        public void UnreadableFirstSicBoRow_LeavesNoCurrentResult_InsteadOfPromotingAnOlderOne()
+        {
+            MtdTableSummaryMessage message = TestSamples.Roulette(3, "7-7-7", "1-2-3", "4-4-6");
+            message.GameType = "SICBO";
+
+            SicBoSnapshot snapshot = (SicBoSnapshot)SnapshotParser.Parse(message);
+
+            Assert.IsNull(snapshot.Current);
+            Assert.IsTrue(snapshot.CurrentResultUnreadable);
+            CollectionAssert.AreEqual(new[] { 6, 14 }, snapshot.History.Select(result => result.Total));
+        }
+
+        [Test]
+        public void MissingFirstRow_IsAnUnreadableCurrentResult()
+        {
+            MtdTableSummaryMessage message = TestSamples.Roulette(3, "17", "24");
+            message.Results[0] = null;
+
+            RouletteSnapshot snapshot = (RouletteSnapshot)SnapshotParser.Parse(message);
+
+            Assert.IsNull(snapshot.Current);
+            Assert.IsTrue(snapshot.CurrentResultUnreadable);
+            Assert.AreEqual("", snapshot.UnreadableCurrentResult);
+            Assert.AreEqual(1, snapshot.History.Count);
+        }
+
+        [Test]
+        public void ReadableResults_SplitIntoCurrentAndHistory()
+        {
+            RouletteSnapshot snapshot = (RouletteSnapshot)SnapshotParser.Parse(TestSamples.Roulette(3, "17", "24", "5"));
+
+            Assert.AreEqual("17", snapshot.Current.Value.Pocket.Label);
+            Assert.IsFalse(snapshot.CurrentResultUnreadable);
+            Assert.IsNull(snapshot.UnreadableCurrentResult);
+            CollectionAssert.AreEqual(new[] { "24", "5" }, snapshot.History.Select(result => result.Pocket.Label));
+            CollectionAssert.AreEqual(new[] { "17", "24", "5" }, snapshot.ResultKeys);
+        }
+
+        [Test]
+        public void NoResultsAtAll_IsNotAnUnreadableResult()
+        {
+            RouletteSnapshot snapshot = (RouletteSnapshot)SnapshotParser.Parse(TestSamples.Roulette(3));
+
+            Assert.IsNull(snapshot.Current);
+            Assert.IsFalse(snapshot.CurrentResultUnreadable);
+            Assert.AreEqual(0, snapshot.ResultKeys.Count);
+        }
+
+        [Test]
+        public void Summary_OnItsOwnTablesTopic_IsRead_InBothTopicForms()
+        {
+            byte[] payload = TestSamples.Bytes(MtdJson.Serialize(TestSamples.Roulette(4, "17")));
+            Guid tableId = TestSamples.TableId(4);
+
+            TableSnapshot fromMqtt = SummaryReader.Read($"tcsjh/crown/table/{tableId}/mtdsummary", payload, out _, out string mqttProblem);
+            TableSnapshot fromNats = SummaryReader.Read($"tcsjh.table.{tableId}.mtdsummary", payload, out _, out string natsProblem);
+
+            Assert.IsNull(mqttProblem);
+            Assert.IsNull(natsProblem);
+            Assert.AreEqual(tableId, fromMqtt.TableId);
+            Assert.AreEqual(tableId, fromNats.TableId);
+        }
+
+        [Test]
+        public void Summary_NamingAnotherTable_IsIgnored()
+        {
+            // Sent on table 1's topic, but the payload claims to be table 2.
+            byte[] payload = TestSamples.Bytes(MtdJson.Serialize(TestSamples.Roulette(2, "17")));
+
+            TableSnapshot fromMqtt = SummaryReader.Read(TestSamples.Topic(1), payload, out _, out string mqttProblem);
+            TableSnapshot fromNats = SummaryReader.Read(MtdTopics.ToNatsSubject(TestSamples.Topic(1)), payload, out _, out string natsProblem);
+
+            Assert.IsNull(fromMqtt);
+            Assert.IsNull(fromNats);
+            StringAssert.Contains(TestSamples.TableId(2).ToString(), mqttProblem);
+            StringAssert.Contains("not the table that topic belongs to", natsProblem);
+        }
+
+        [Test]
+        public void Summary_NamingAnotherTable_CannotChangeThatTablesRegistryEntry()
+        {
+            TableRegistry registry = new TableRegistry(35);
+            registry.Apply(SummaryReader.Read(TestSamples.Topic(2), TestSamples.Bytes(MtdJson.Serialize(TestSamples.Roulette(2, "17"))), out _, out _), 0);
+
+            // Table 1's topic carries a message dressed up as table 2.
+            TableSnapshot forged = SummaryReader.Read(TestSamples.Topic(1), TestSamples.Bytes(MtdJson.Serialize(TestSamples.Roulette(2, "36", "17"))), out _, out _);
+            registry.Apply(forged, 1);
+
+            Assert.IsTrue(registry.TryGet(TestSamples.TableId(2), out TableState state));
+            CollectionAssert.AreEqual(new[] { "17" }, state.Snapshot.ResultKeys);
+        }
+
+        [TestCase("tcsjh/crown/table/11111111-0000-4000-8000-000000000001/gamesummary")]
+        [TestCase("tcsjh/crown/table/not-a-guid/mtdsummary")]
+        [TestCase("tcsjh/crown/table/00000000-0000-0000-0000-000000000000/mtdsummary")]
+        [TestCase("other/crown/table/11111111-0000-4000-8000-000000000001/mtdsummary")]
+        [TestCase("tcsjh/crown/11111111-0000-4000-8000-000000000001/mtdsummary")]
+        [TestCase("mtdsummary")]
+        [TestCase("")]
+        [TestCase(null)]
+        public void Message_NotOnASummaryTopic_IsIgnored(string topic)
+        {
+            byte[] payload = TestSamples.Bytes(MtdJson.Serialize(TestSamples.Roulette(1, "17")));
+
+            Assert.IsFalse(MtdTopics.TryGetSummaryTableId(topic, out _));
+            Assert.IsNull(SummaryReader.Read(topic, payload, out _, out string problem));
+            Assert.IsNotEmpty(problem);
+        }
+
+        [Test]
+        public void Summary_ThatCannotBeRead_IsIgnoredWithAReason()
+        {
+            Assert.IsNull(SummaryReader.Read(TestSamples.Topic(1), TestSamples.Bytes("{ not json"), out _, out string problem));
+            StringAssert.Contains("unreadable", problem);
         }
 
         [Test]

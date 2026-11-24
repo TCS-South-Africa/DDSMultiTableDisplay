@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
+using System.Net.Security;
 using System.Security.Authentication;
+using System.Security.Cryptography.X509Certificates;
 using System.Threading;
 using System.Threading.Tasks;
 using MQTTnet;
@@ -15,7 +17,6 @@ namespace MTD
     // and subscribes again, for as long as the transport lives.
     public sealed class MqttMtdTransport : IMtdTransport
     {
-        const int retrySeconds = 5;
         const int connectionCheckSeconds = 2;
 
         readonly MtdConnectionSettings settings;
@@ -28,6 +29,10 @@ namespace MTD
         volatile bool connected;
         volatile bool disposed;
         volatile string lastError;
+        volatile string certificateProblem;
+        volatile bool certificateWasChecked;
+        volatile string subscriptionProblem;
+        volatile string lastLogged;
         bool started;
 
         public MqttMtdTransport(MtdConnectionSettings settings)
@@ -35,11 +40,14 @@ namespace MTD
             this.settings = settings;
         }
 
+        // How long to wait before trying again after a failed connection or a refused subscription.
+        internal TimeSpan RetryInterval = TimeSpan.FromSeconds(5);
+
         public string Name => "MQTT";
 
         public bool Connected => connected && !disposed;
 
-        public string LastError => lastError;
+        public string LastError => subscriptionProblem ?? certificateProblem ?? lastError;
 
         int Port => settings.Port > 0 ? settings.Port : MtdTopics.DefaultMqttPort;
 
@@ -79,12 +87,10 @@ namespace MTD
                 .WithCleanSession(true)
                 .WithTlsOptions(builder =>
                 {
-                    // The same trust policy as DDS: any server certificate is accepted.
+                    // Every certificate decision is MtdTlsTrust's; none of the client's own "allow" switches is set.
                     builder.UseTls(settings.UseTls)
                         .WithSslProtocols(SslProtocols.Tls12)
-                        .WithAllowUntrustedCertificates()
-                        .WithIgnoreCertificateChainErrors()
-                        .WithCertificateValidationHandler(args => true);
+                        .WithCertificateValidationHandler(args => AcceptsCertificate(args.Certificate, args.SslPolicyErrors));
                 })
                 .Build();
 
@@ -92,45 +98,78 @@ namespace MTD
 
             while (!disposed)
             {
-                if (!client.IsConnected)
-                {
-                    connected = false;
-                    try
-                    {
-                        MqttClientConnectResult result = await client.ConnectAsync(options, token).ConfigureAwait(false);
-                        if (result.ResultCode == MqttClientConnectResultCode.Success)
-                        {
-                            await SubscribeAllAsync(token).ConfigureAwait(false);
-                            connected = true;
-                            lastError = null;
-                            Debug.Log($"MTD: connected to MQTT at {settings.Host}:{Port}");
-                        }
-                        else
-                        {
-                            lastError = $"connection refused: {result.ResultCode}";
-                            Debug.Log($"MTD: MQTT {lastError}");
-                        }
-                    }
-                    catch (OperationCanceledException)
-                    {
-                        return;
-                    }
-                    catch (Exception exception)
-                    {
-                        lastError = exception.InnerException != null ? $"{exception.Message} ({exception.InnerException.Message})" : exception.Message;
-                        Debug.Log($"MTD: could not connect to MQTT at {settings.Host}:{Port}: {lastError}");
-                    }
-                }
-
                 try
                 {
-                    await Task.Delay(TimeSpan.FromSeconds(connected ? connectionCheckSeconds : retrySeconds), token).ConfigureAwait(false);
+                    if (!client.IsConnected)
+                    {
+                        connected = false;
+                        subscriptionProblem = null;
+                        await ConnectAsync(options, token).ConfigureAwait(false);
+                    }
+                    else if (subscriptionProblem != null)
+                    {
+                        // The broker may have been given the permission since the last attempt.
+                        await SubscribeAllAsync(token).ConfigureAwait(false);
+                    }
+
+                    bool allIsWell = connected && subscriptionProblem == null;
+                    await Task.Delay(allIsWell ? TimeSpan.FromSeconds(connectionCheckSeconds) : RetryInterval, token).ConfigureAwait(false);
                 }
                 catch (OperationCanceledException)
                 {
                     return;
                 }
             }
+        }
+
+        async Task ConnectAsync(MqttClientOptions options, CancellationToken token)
+        {
+            certificateWasChecked = false;
+            try
+            {
+                MqttClientConnectResult result = await client.ConnectAsync(options, token).ConfigureAwait(false);
+                if (!certificateWasChecked) certificateProblem = null;
+
+                if (result.ResultCode != MqttClientConnectResultCode.Success)
+                {
+                    lastError = $"connection refused: {result.ResultCode}";
+                    LogOnChange($"MTD: MQTT {lastError}");
+                    return;
+                }
+
+                connected = true;
+                lastError = null;
+                LogOnChange($"MTD: connected to MQTT at {settings.Host}:{Port}");
+                await SubscribeAllAsync(token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception exception)
+            {
+                // A certificate refusal from an earlier attempt must not hide a different failure in this one.
+                if (!certificateWasChecked) certificateProblem = null;
+
+                lastError = MtdTransportErrors.Describe(exception);
+                LogOnChange($"MTD: could not connect to MQTT at {settings.Host}:{Port}: {LastError}");
+            }
+        }
+
+        bool AcceptsCertificate(X509Certificate certificate, SslPolicyErrors errors)
+        {
+            bool accepted = MtdTlsTrust.Accepts(certificate, errors, settings.Host, settings.AllowUntrustedCertificate, settings.TrustedCertificateFolder, out string problem);
+            certificateProblem = problem;
+            certificateWasChecked = true;
+            return accepted;
+        }
+
+        // The loop retries every few seconds for as long as something is wrong. Each new state is logged once.
+        void LogOnChange(string message)
+        {
+            if (message == lastLogged) return;
+            lastLogged = message;
+            Debug.Log(message);
         }
 
         public void Subscribe(string mqttTopicFilter, MtdMessageHandler handler)
@@ -149,16 +188,18 @@ namespace MTD
                 {
                     try
                     {
-                        await SubscribeAsync(mqttTopicFilter, lifetime.Token).ConfigureAwait(false);
+                        string problem = await SubscribeAsync(mqttTopicFilter, lifetime.Token).ConfigureAwait(false);
+                        if (problem != null) subscriptionProblem = problem; // The connect loop keeps retrying it.
                     }
-                    catch (Exception exception)
+                    catch (OperationCanceledException)
                     {
-                        Debug.Log($"MTD: could not subscribe to MQTT topic {mqttTopicFilter}: {exception.Message}");
                     }
                 });
             }
         }
 
+        // Subscribes to everything asked for and records the outcome: subscriptionProblem is null afterwards only if
+        // the broker granted every one.
         async Task SubscribeAllAsync(CancellationToken token)
         {
             List<string> filters = new List<string>();
@@ -167,13 +208,20 @@ namespace MTD
                 foreach ((string filter, MtdMessageHandler _) in subscriptions) filters.Add(filter);
             }
 
+            string firstProblem = null;
             foreach (string filter in filters)
             {
-                await SubscribeAsync(filter, token).ConfigureAwait(false);
+                string problem = await SubscribeAsync(filter, token).ConfigureAwait(false);
+                firstProblem ??= problem;
             }
+
+            subscriptionProblem = firstProblem;
         }
 
-        async Task SubscribeAsync(string filter, CancellationToken token)
+        // Returns null when the broker granted the subscription, otherwise what went wrong. A broker answers a
+        // subscription it will not serve with a refusal code and leaves the connection open, so a connection that is
+        // up says nothing about whether any message can arrive.
+        async Task<string> SubscribeAsync(string filter, CancellationToken token)
         {
             MqttClientSubscribeOptions subscribeOptions = factory.CreateSubscribeOptionsBuilder()
                 .WithTopicFilter(topicFilter =>
@@ -183,8 +231,32 @@ namespace MTD
                 })
                 .Build();
 
-            await client.SubscribeAsync(subscribeOptions, token).ConfigureAwait(false);
-            Debug.Log($"MTD: subscribed to MQTT topic {filter}");
+            string problem = null;
+            try
+            {
+                MqttClientSubscribeResult result = await client.SubscribeAsync(subscribeOptions, token).ConfigureAwait(false);
+                if (result.Items.Count == 0) problem = $"the broker did not answer the subscription to {filter}";
+
+                foreach (MqttClientSubscribeResultItem item in result.Items)
+                {
+                    if (item.ResultCode > MqttClientSubscribeResultCode.GrantedQoS2)
+                    {
+                        string reason = string.IsNullOrEmpty(result.ReasonString) ? "" : $", \"{result.ReasonString}\"";
+                        problem = $"the broker refused the subscription to {filter} ({item.ResultCode}{reason})";
+                    }
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception exception)
+            {
+                problem = $"could not subscribe to {filter}: {exception.Message}";
+            }
+
+            LogOnChange(problem == null ? $"MTD: subscribed to MQTT topic {filter}" : $"MTD: MQTT: {problem}");
+            return problem;
         }
 
         Task OnMessageReceived(MqttApplicationMessageReceivedEventArgs args)

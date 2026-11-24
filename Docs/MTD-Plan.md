@@ -1,6 +1,6 @@
 # DDS Multi-Table Display (MTD): implementation plan
 
-**Status:** plan only, written 24 November 2026. Nothing is implemented. The project is still the Unity 6000.6.10f1 URP template.
+**Status:** Pass 1 is implemented (24 November 2026, branch `pass-1-backend`). Section 10 says what was built, what was checked and where it differs from this plan. Pass 2 has not started, and DDS does not publish the summary yet.
 
 MTD shows the results history of several DDS tables on one 16:9 screen. Each table gets a widget in a slot. The work runs in two passes, each in its own session:
 
@@ -170,7 +170,7 @@ Because the widget prefabs hang off the layout, the same UI can use tall column 
 
 **File.** `C:\tcs\mtd\MtdConfig.json`, written with `JsonUtility` in the way DDS writes `C:\tcs\dds\DisplayConfig.json`: write a temp file, validate it, replace the real file, keep `MtdConfig.last-known-good.json`. On a failed read MTD falls back to the backup, then to defaults *(DDS behaviour from survey, `Configuration.cs:52-77, 1311-1369, 1737-1835`)*.
 
-**Applying.** "Confirm & Save" writes the file and reloads the scene. Nothing applies live. `MtdApp.OnDestroy` disposes the connection first, as DDS does (DDS `TConnect2.cs:125-130`).
+**Applying.** "Confirm & Save" writes the file, then `MtdApp` tears down the connection, the table state and the MTD UI and builds them again from the new file. Nothing applies piecemeal. (DDS reloads its scene for the same purpose; rebuilding in place has the same effect without depending on the build's scene list.)
 
 **Options.** Keys follow DDS's pipe convention; the label is the text after the last pipe.
 
@@ -187,11 +187,12 @@ Because the widget prefabs hang off the layout, the same UI can use tall column 
 | `T-Connect\|Device ID` | read-only | generated | See assumption A3. |
 | `Tables\|Table List Source` | dropdown | T-Connect | T-Connect or Discover. Forced to Discover in MQTT mode. |
 | `Tables\|MTD Table Numbers` | text | blank | Discover only. Ranges and commas; blank means all. |
-| `Tables\|Table Timeout (s)` | number | 35 | |
+| `Tables\|Table Timeout (s)` | number | 35 | Not below 20: tables report every 10 seconds. |
 | `Tables\|Skip Closed Tables` | checkbox | on | |
 | `Display\|MTD UI` | dropdown | first in catalog | Lists the catalog. |
 | `Display\|Number Of Tables` | dropdown | 6 | 4 or 6. |
 | `Display\|Demo Mode` | checkbox | off | Simulated tables, no broker. |
+| `Display\|Demo Tables` | number | 12 | Demo Mode only. How many tables are simulated. |
 | `Switching\|Mode` | dropdown | Pages | Pages or Slot By Slot. |
 | `Switching\|Dwell Time (s)` | number | 120 | |
 | `Switching\|Slot Swap Interval (s)` | number | 5 | Slot By Slot only. |
@@ -327,3 +328,56 @@ These were chosen from the evidence instead of asked. Each is cheap to change be
 - What the header shows exactly: whether the table label is the table number or the MTD number, and where the table name (for example "SB") appears.
 - How triples look in the SicBo widget.
 - Whether a four-across version of this design is wanted, and any portrait design.
+
+## 10. Pass 1 result
+
+Built on 24 November 2026 on branch `pass-1-backend`, one commit per step. `main` holds only the baseline.
+
+### How to run it
+
+- Open `Assets/Scenes/MTD.unity` and press Play. The configuration left in `C:\tcs\mtd\MtdConfig.json` has Demo Mode on, so twelve simulated tables appear on the debug UI.
+- **C** opens the Configuration Menu.
+- `MTD > Setup` in the Editor's menu bar rebuilds the generated assets: the menu prefab, the scene, the build and player settings.
+- Edit-mode tests cannot be run with `unity test` while the Editor has the project open. Use `unity command test run --project-path . --mode editor`.
+- The live NATS tests are marked Explicit and need a local server first: `nats-server -js -p 14222`, then run the tests in category `Live`. NATS Server 2.15.3 and the NATS CLI 0.5.2 were installed with winget for this.
+
+### What was checked
+
+| Check | Result |
+| --- | --- |
+| Edit-mode tests | 157 pass: message parsing, change classification, staleness, table ordering and filtering, both switching modes, subject mapping, simulated tables, configuration persistence. |
+| Live NATS tests | 5 pass against nats-server 2.15.3 inside the Editor: wildcard subscription, request with no responder, Key-Value read and watch, and the T-Connect client registering, pinging, reading its table list and picking up a change to it. The test plays DDS and the T-Connect server. |
+| App against a NATS server | The four sample summaries published with the `nats` CLI on `tcsjh.table.{id}.mtdsummary` appeared in MTD-number order. Blackjack, an unknown game and a malformed payload were skipped with one log line each. Tables dropped out 35 seconds after the last message. Stopping and restarting the server showed the lost connection and then recovered. |
+| Demo Mode | Pages with 12 tables and 6 slots; slot by slot with 7 tables and 4 slots. Landscape and portrait Game views. Entering and leaving play mode repeatedly left no errors. |
+| Configuration Menu | Every option shows its saved value; dependent rows grey out; Cancel discards; Confirm & Save writes the file and rebuilds; confirming with no changes writes nothing. Compared side by side with DDS's own menu prefab rendered in the same Game view. |
+
+### What was not checked
+
+- **MQTT.** `MqttMtdTransport` compiles and follows DDS's `MqttManagerLite`, but there is no MQTT 5 broker on this machine, so it has never connected to anything.
+- **A real T-Connect server.** Registration and the table list were exercised only against the test's stand-in, which was written from the October 2026 server snapshot.
+- **A real DDS table.** DDS does not publish the summary yet.
+- **TLS**, on either transport.
+- **A standalone build.** Everything ran in the Editor.
+- **Keyboard and mouse by hand.** The CLI's key simulation does not reach the Editor's play mode, so the **C** key was exercised by queueing an Input System event, and the controls through their own change events. Nobody has clicked through the menu with a mouse.
+
+### Where the build differs from this plan
+
+- **Applying a configuration rebuilds in place** instead of reloading the scene (section 3.5 is updated).
+- **A new result is recognised from the shape of the result list**, not from a change of `GameId` (contract section 6 is updated). This does not depend on DDS reporting the right game's ID.
+- **The table list is read two ways**: by a Key-Value watch, and by a direct read every 30 seconds in case the watch stops silently.
+- **The table timeout cannot be set below 20 seconds.** A value shorter than the heartbeat made healthy tables drop out.
+- **`Display|Demo Tables` was added** so Demo Mode can be run with any number of tables.
+- **The menu's panels have no background of their own.** DDS's panels carry Image components that are switched off, so only the orange background and the TCS watermark are drawn. The MTD menu was first built with those images on and looked different; it now matches.
+- **The scene and the menu prefab are generated by editor code** (`Assets/MTD/Editor`), not assembled by hand, so they can be rebuilt exactly.
+- **DDS's NATS socket wrapper was not copied.** It exists to bound blocked writes when publishing, and MTD does not publish.
+- **Player settings were changed**: company name `TCS JohnHuxley` (as DDS), product name `DDS Multi-Table Display`, run in background, fullscreen window at native resolution. Rename the product if it should be called something else.
+- **The template's `SampleScene`, `TutorialInfo` and `Readme` were left in the project.** They are no longer in the build.
+
+### What Pass 2 starts from
+
+A new MTD UI is a folder of prefabs plus two assets, with no change to the code above the widgets:
+
+1. Widget scripts deriving from `RouletteTableWidget` and `SicBoTableWidget` (`Assets/MTD/UI/TableWidget.cs`). `DebugTableWidget` shows every field a snapshot offers.
+2. A layout prefab per orientation and slot count: a Canvas with an `MtdLayout` listing its slots and widget prefabs, and optionally an `MtdStatusView` and an empty-slot prefab.
+3. An `MtdUiDefinition` asset listing the layouts, in a `Resources` folder.
+4. An `MtdUiCatalog` asset at `Resources/MtdUis/MtdUiCatalog` with an entry pointing at the definition. With a blank `Display|MTD UI` setting, the first catalog entry is what loads.

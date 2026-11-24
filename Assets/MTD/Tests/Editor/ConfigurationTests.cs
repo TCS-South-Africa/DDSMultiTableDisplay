@@ -172,7 +172,7 @@ namespace MTD.Tests
             Assert.AreEqual(65535, data.tConnect.port);
             Assert.AreEqual("MTD 01", data.tConnect.mtdName);
             Assert.AreEqual("", data.tConnect.url);
-            Assert.AreEqual(5, data.tables.tableTimeoutSeconds);
+            Assert.AreEqual(MtdConfigurationData.MinTableTimeoutSeconds, data.tables.tableTimeoutSeconds);
             Assert.AreEqual(6, data.display.numberOfTables);
             Assert.AreEqual(1, data.display.demoTables);
             Assert.AreEqual(5, data.switching.dwellTimeSeconds);

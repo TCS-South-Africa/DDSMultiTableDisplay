@@ -14,6 +14,10 @@ namespace MTD
     [Serializable]
     public class MtdConfigurationData
     {
+        // Tables send a summary every 10 seconds (the contract's heartbeat). A timeout shorter than two of those
+        // would drop healthy tables whenever a single heartbeat ran late.
+        public const int MinTableTimeoutSeconds = 20;
+
         public TConnectSettings tConnect = new TConnectSettings();
         public TableSettings tables = new TableSettings();
         public DisplaySettings display = new DisplaySettings();
@@ -84,7 +88,7 @@ namespace MTD
             tConnect.mtdName = string.IsNullOrWhiteSpace(tConnect.mtdName) ? "MTD 01" : tConnect.mtdName.Trim();
 
             tables.mtdTableNumbers = (tables.mtdTableNumbers ?? "").Trim();
-            tables.tableTimeoutSeconds = Mathf.Clamp(tables.tableTimeoutSeconds, 5, 3600);
+            tables.tableTimeoutSeconds = Mathf.Clamp(tables.tableTimeoutSeconds, MinTableTimeoutSeconds, 3600);
             if (!Enum.IsDefined(typeof(TableListSourceKind), tables.tableListSource)) tables.tableListSource = TableListSourceKind.TConnect;
 
             display.mtdUi = (display.mtdUi ?? "").Trim();

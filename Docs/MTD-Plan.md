@@ -459,3 +459,43 @@ One related case was seen and left alone, because it is a choice about what a di
 
 - **Connecting to the name `localhost` over NATS fails under Unity** when the server listens on IPv4 only. The name resolves to the IPv6 loopback address first and the client does not fall back to the IPv4 one. `127.0.0.1` works. DDS uses the same client.
 - **The password is stored in plain text** in `MtdConfig.json`, as it is in DDS.
+
+## 12. Pass 2 handoff — 25 November 2026
+
+**4K Columns** is selectable under **Display → MTD UI**. The catalog stores the ID `Columns4K`. The local Configuration Menu saved that ID and the app loaded it again on startup. This machine is configured for six slots and twelve demo tables. Debug remains selectable.
+
+The six- and four-slot landscape prefabs share the typed Roulette and Sic Bo widgets. Each slot has its own canvas. The supplied artwork is packed into two sprite sheets under `Assets/MTD/UI/Columns4K/Art`. The 40 current pockets and the 40 numbered history balls include all four zero labels. The table label uses the DDS name and patron-facing number. The amount fields display the DDS strings verbatim.
+
+The gold titles, paired variant logos and dice come from the approved artwork. The frame shading was separated from the supplied blue panels so each table can tint its own column. The multiplier rim, highlights and row masks were made for this UI. Small uses the red 小 sprite, big the blue 大 sprite, and triple the supplied green 圍 sprite. The visible glyphs determine the mapping because the two small/big source filenames are reversed. There is no outstanding branded placeholder.
+
+| Verification | Observed result |
+| --- | --- |
+| Demo Mode | Three standard Roulette tables, one Power Reel, one Xtra and one Sic Bo. The 11 earlier results fill their own chronological rows. |
+| Twelve tables | Six-slot pages switched from tables 1–6 to 7–12 and back. With four slots, one-second staggered swaps went from 1,2,3,4 through 5,2,3,4 and 5,6,3,4 to 5,6,7,8. |
+| Portrait | At 1080×1920 the loader selected the six-slot landscape fallback. The complete board was centered with black space above and below. |
+| Editor tests | 227 passed. Nine additional explicit NATS tests passed on two local brokers. |
+| Local broker and display | A stand-in returned assignment code 2749. Discovery showed waiting, then one occupied and five empty slots. The widget showed a new `000` with multiplier 100, retained its preceding spin, corrected the current pocket to `0000`, and displayed the changed maximum `100.000 EUR`. Closing and reopening the table removed and restored the widget. Stopping the broker showed connection loss while the table was still visible. |
+| Native 4K Game view | On the RTX 5070 Laptop GPU, a 20-second run delivered nine bursts with two updates per visible table per burst. The final result and first history row matched the last two deliveries. Across 5,875 rendered frames the median interval was 3.03 ms, p95 was 5.61 ms and p99 was 8.09 ms. One frame took 36.93 ms. GPU p95 was 4.32 ms across 5,628 timing samples. |
+| Windows release build | Unity 6000.6.10f1 built `Builds/Columns4K/MTD.exe` with zero errors and 509 shader-compiler warnings. The release player loaded the saved demo configuration and exited with code 0. A separate instrumented player rendered all six columns to a 3840×2160 texture for visual inspection. The hidden player window used 3840×1600. |
+
+**Game view captures** · [Six columns at 3840×2160](Screenshots/Columns-3840x2160.png) · [Six columns at 1920×1080](Screenshots/Columns-1920x1080.png) · [Four columns at 1920×1080](Screenshots/Columns-Four-1920x1080.png)
+
+**Live DDS check still open.** DDS now contains the summary publisher. The local DDS configuration had T-Connect disabled and no enrolled MTD table number. The end-to-end broker check used a test publisher. A provisioned table is still needed to confirm its own result, correction and formatted-limit messages.
+
+### Reference motion and typography
+
+Roulette follows `Mock up MTD  1.mp4`. The current pocket and multiplier shrink about their own centres. History moves down one spin with a one-frame delay between rows at the film’s 30 fps. The incoming multiplier plays the isolated winning sparks. The first ball is centred 90 design pixels into its rounded lane. Each ball is 112 pixels across on a 125-pixel pitch, leaving a 13-pixel gap at rest. The scroll limits peak speed so consecutive results in the same lane also stay separated in motion.
+
+Sic Bo follows `Mock up MTD  2.mp4`. The three current dice, total and outcome shrink and return four film frames apart. Each history row slides right, changes its value beyond the local history mask and returns from that same edge at the same height. The next row begins five frames later. The distance follows the width of the owning column in both landscape layouts.
+
+The titles, outcome glyphs and Roulette numerals use artwork. The Sic Bo glyphs have transparent cutouts and translucent black shadows. Table names, limits, chip values and Sic Bo totals use bundled Google Prompt fonts. The license is in `Assets/StreamingAssets/Licenses/Prompt-OFL.txt`. All patron-visible results, chip values, limits and table identifiers still come from the typed snapshot.
+
+Two highlights follow the rounded gold border at a constant speed in the six-column design. A separate diagonal shine crosses the gold lettering from the first slot to the last on a 6.1-second cycle. Gold Xtra particles and magenta Power Reel particles rise continuously at different speeds and drift sideways. The header close-up covers both variants at native 4K pixel density. [Header motion detail](Screenshots/Columns-Header-Detail.mp4)
+
+The motion recording puts Sic Bo in the third slot, between two Roulette tables. Across all 107 sampled frames of its transition at 1920×1080, the visible history area outside that panel matched the starting frame pixel for pixel. The recording then shows Xtra receiving a new multiplier. The demo includes a triple alongside small and big so all three outcome glyphs can be inspected. [Game view motion recording](Screenshots/Columns-Motion.mp4)
+
+All 231 editor tests passed, including same-lane clearance throughout a Roulette scroll, four- and six-slot Sic Bo clipping, and interruption by a correction or reassignment. Twelve-table Demo Mode switched full pages and staggered individual slots. Saving in the Configuration Menu and reloading from disk returned `Columns4K`. At 3840×2160 on the RTX 5070 Laptop GPU, a 20-second Game view run exercised nine double updates to all six slots. Across 5,218 frames, the median interval was 3.36 ms, p95 was 6.55 ms and the longest frame was 23.43 ms. GPU p95 was 4.86 ms. The last two delivered results, a subsequent correction and the changed formatted limits all appeared as expected.
+
+Frame tracking over 366 native-resolution frames in each landscape layout showed the two border highlights advancing continuously through the corners. In the 1080p recording, the shine reached the centres of the six titles in order at 0.73, 1.47, 2.20, 2.97, 3.70 and 4.43 seconds. Both variant particle fields showed upward motion in every sampled interval.
+
+At 1080×1920 the app loaded the six-slot landscape fallback. The Windows build succeeded with zero errors and 509 warnings from the Unity inference package shaders. It includes the Prompt license in its StreamingAssets folder. The release player started the twelve-table demo, responded and exited with code 0. The local DDS configuration still has `useTConnect2` disabled. A live publisher result, correction and limit change remain to be checked on a provisioned table.

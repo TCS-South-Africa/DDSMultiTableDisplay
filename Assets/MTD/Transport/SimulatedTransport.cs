@@ -22,7 +22,7 @@ namespace MTD
             ("ROULETTE", "AR"), ("ROULETTE", "AR"), ("ROULETTE", "AR"), ("ROULETTE_POWER", "AR"), ("ROULETTE_XTRA", "AR"), ("SICBO", "SB"),
         };
 
-        static readonly string[] colours = { "#0B4F8A", "#0B6B3A", "#A31621", "#5B1A99", "#8A5A0B", "#0B6E8A" };
+        static readonly string[] colours = { "#3F31F3", "#097437", "#E60004", "#611F8C", "#DF4C28", "#0A75B5" };
         static readonly (long min, long max)[] limits = { (1000, 1000000), (2500, 250000), (5000, 500000), (2000, 50000) };
 
         readonly object gate = new object();

@@ -324,8 +324,6 @@ namespace MTD
         // The single most useful thing to tell someone looking at the screen, or nothing when tables are showing.
         string BuildHeadline(MtdConfigurationData config)
         {
-            if (eligibleCount > 0) return "";
-
             if (transport == null)
             {
                 return "Not connected. Press C to open the Configuration Menu.";
@@ -344,6 +342,8 @@ namespace MTD
                 return $"Connected to {transport.Name}, but {transportProblem}";
             }
 
+            if (eligibleCount > 0) return "";
+
             if (tConnectClient != null)
             {
                 switch (tConnectClient.State)
@@ -357,7 +357,8 @@ namespace MTD
                     case TConnectAssignmentState.NoReply:
                         return "Waiting for T-Connect: the server is not answering";
                     default:
-                        return $"Registering with T-Connect as \"{config.tConnect.mtdName}\"";
+                        return $"Registering with T-Connect as \"{config.tConnect.mtdName}\""
+                            + (string.IsNullOrEmpty(tConnectClient.AssignmentCode) ? "" : $"\nAssignment code {tConnectClient.AssignmentCode}");
                 }
             }
 

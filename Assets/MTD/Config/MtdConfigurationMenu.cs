@@ -174,11 +174,10 @@ namespace MTD
 
             string current = configuration.display.mtdUi;
             bool currentIsInstalled = current.Length == 0;
+            choices.Add(new Choice($"Default ({installed[0].DisplayName})", ""));
             for (int i = 0; i < installed.Count; i++)
             {
-                // The first UI is what a blank setting loads, so it stands for the blank value while that is in use.
-                string value = i == 0 && current.Length == 0 ? "" : installed[i].Id;
-                choices.Add(new Choice(installed[i].DisplayName, value));
+                choices.Add(new Choice(installed[i].DisplayName, installed[i].Id));
                 if (string.Equals(installed[i].Id, current, StringComparison.OrdinalIgnoreCase)) currentIsInstalled = true;
             }
 

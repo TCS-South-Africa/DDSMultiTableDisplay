@@ -118,6 +118,7 @@ SubShader {
 		#pragma shader_feature __ BEVEL_ON
 		#pragma shader_feature __ UNDERLAY_ON UNDERLAY_INNER
 		#pragma shader_feature __ GLOW_ON
+		#pragma shader_feature_local __ MTD_HEADER_SHEEN
 
 		#pragma multi_compile __ UNITY_UI_CLIP_RECT
 		#pragma multi_compile __ UNITY_UI_ALPHACLIP
@@ -126,6 +127,9 @@ SubShader {
 		#include "UnityUI.cginc"
 		#include "TMPro_Properties.cginc"
 		#include "TMPro.cginc"
+		#if MTD_HEADER_SHEEN
+		#include "Assets/MTD/UI/Columns4K/Art/Header Sheen.cginc"
+		#endif
 
 		struct vertex_t
 		{
@@ -154,6 +158,9 @@ SubShader {
 		    #endif
 
 		    float4 textures			: TEXCOORD5;
+		    #if MTD_HEADER_SHEEN
+			float sheen : TEXCOORD6;
+		    #endif
 		};
 
 		// Used by Unity internally to handle Texture Tiling and Offset.
@@ -227,6 +234,9 @@ SubShader {
                 input.color.rgb = UIGammaToLinear(input.color.rgb);
             }
 			output.position = vPosition;
+			#if MTD_HEADER_SHEEN
+			output.sheen = MtdSheenCoordinate(vPosition);
+			#endif
 			output.color = input.color;
 			output.atlas =	input.texcoord0;
 			output.param =	float4(alphaClip, scale, bias, weight);
@@ -267,6 +277,9 @@ SubShader {
 			faceColor.rgb *= input.color.rgb;
 
 			faceColor *= tex2D(_FaceTex, input.textures.xy + float2(_FaceUVSpeedX, _FaceUVSpeedY) * _Time.y);
+			#if MTD_HEADER_SHEEN
+			faceColor.rgb = MtdGoldSheen(faceColor.rgb, input.sheen);
+			#endif
 			outlineColor *= tex2D(_OutlineTex, input.textures.zw + float2(_OutlineUVSpeedX, _OutlineUVSpeedY) * _Time.y);
 
 			faceColor = GetColor(sd, faceColor, outlineColor, outline, softness);

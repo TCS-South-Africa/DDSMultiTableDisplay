@@ -1,0 +1,26 @@
+{
+  "SchemaVersion": 1,
+  "TableId": "11111111-0000-4000-8000-000000000004",
+  "GameId": "aaaaaaaa-0000-4000-8000-000000000004",
+  "GameType": "ROULETTE_POWER",
+  "TableName": "AR",
+  "TableNumber": 4,
+  "MTDTableNumber": "4",
+  "MTDColourSetting": "#6A1B9A",
+  "TableOpen": true,
+  "MinBet": 1000,
+  "MaxBet": 1000000,
+  "MinBetText": "$10",
+  "MaxBetText": "$10,000",
+  "Results": [
+    { "Result": "21", "Multiplier": 50, "MultiplierColour": "#C9A227" },
+    { "Result": "24", "Multiplier": 30, "MultiplierColour": "#2E7D32" },
+    { "Result": "26", "Multiplier": 20, "MultiplierColour": "#1565C0" },
+    { "Result": "3", "Multiplier": 17, "MultiplierColour": "#B71C1C" },
+    { "Result": "00", "Multiplier": 60, "MultiplierColour": "#AD1457" }
+  ],
+  "HotNumbers": ["24", "26", "3", "8"],
+  "ColdNumbers": ["1", "14", "35", "0"],
+  "Statistics": { "SampleSize": "200", "Red": "92", "Black": "97", "Zero": "11" },
+  "EventTime": "2026-11-24T10:15:32+00:00"
+}

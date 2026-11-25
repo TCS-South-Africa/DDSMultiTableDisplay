@@ -1,0 +1,12 @@
+{
+  "SchemaVersion": 2,
+  "TableId": "11111111-0000-4000-8000-000000000040",
+  "GameId": "aaaaaaaa-0000-4000-8000-000000000040",
+  "GameType": "SOMETHING_NEW",
+  "TableName": "XX",
+  "TableNumber": 40,
+  "MTDTableNumber": "40",
+  "SomeFieldAddedLater": { "Nested": [1, 2, 3] },
+  "Results": [ { "Result": "whatever", "AnotherNewField": true } ],
+  "EventTime": "2026-11-24T10:15:35+00:00"
+}

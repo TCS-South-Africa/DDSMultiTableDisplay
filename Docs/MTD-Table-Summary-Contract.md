@@ -1,6 +1,6 @@
 # MTD table summary: the DDS → MTD message (contract v1)
 
-**Status:** proposed on 24 November 2026. Neither side is implemented yet, and nothing here has been run against a broker.
+**Status:** proposed on 24 November 2026. MTD's side (the consumer) is implemented and has been run against a local NATS server with sample messages published by hand. DDS's side (the publisher) is not implemented, so no real table has sent this message yet.
 
 DDS publishes one message per table that carries everything MTD needs to draw that table's widget. Every message is a complete snapshot. MTD therefore keeps no history of its own, and a display that starts late needs only one message per table to be correct.
 
@@ -175,14 +175,20 @@ MTD shows as many results and hot/cold numbers as the selected MTD UI has room f
 6. **Only when provisioned and enrolled.** Like every other T-Connect 2 message, nothing is sent until the table has a `TableId` (`TConnect2.cs:300`). A table with no MTD number set does not publish.
 7. **Do not depend on which statistics widgets are loaded.** `BaseStatistics.pocketsCount` is filled by statistics widgets, and a package may not have one. Count from `DataLogger.LatestWinningNumbers` directly.
 
-The heartbeat is also the liveness signal: MTD drops a table from the rotation when it has heard nothing for 35 seconds (configurable).
+The heartbeat is also the liveness signal: MTD drops a table from the rotation when it has heard nothing for 35 seconds. That timeout is configurable on MTD, but not below 20 seconds, so the heartbeat must not be made slower than 10 seconds without changing MTD too.
 
 ## 6. Consumer rules (MTD)
 
 - Identity is `TableId`. `MTDTableNumber` is for ordering and for the server's records, not identity.
-- Keep the newest message per table. Ignore a message whose `EventTime` is older than the one already held.
+- A table may only describe itself. MTD ignores a message whose `TableId` is not the table ID in the topic it arrived on, so nothing that can publish on one table's topic can change another table's widget.
+- Keep the newest message per table. Ignore a message whose `EventTime` is older than the one already held. Every message is compared this way, in the order it arrived; MTD does not assume the last one to arrive is the newest.
 - Ignore unknown fields. Treat a missing optional field as absent, never as an error.
-- A new result is a change of `GameId`. The same `GameId` with a different `Results[0]` is a correction.
+- `Results[0]` is the table's current result and is never replaced by an older one. If MTD cannot read it (an unknown pocket, a value that is not three dice), the widget shows the current result as unavailable and keeps the rest of the list as history. An unreadable entry further down the list is not drawn, but it still counts as one of the table's results, in its place, when two lists are compared under the next rule. Otherwise every result below it would be compared with the wrong one.
+- A new result is recognised from the result list first, and from `GameId` only when the list cannot decide:
+  - "Added" reading: the list MTD already holds reappears one or more places further down the new list. "Edited" reading: the lists are the same length and differ in some places. Whichever reading needs fewer changes wins. `[7, 11, 7]` becoming `[9, 11, 7]` is one edit or two additions, so it is a correction; a history moving down one place is a new result.
+  - When both readings need the same number of changes (repeated values at the top of the list, or a list that holds only the current result), an unchanged `GameId` means a correction and a changed one means a new result.
+  - A shorter list, or a cleared one, is a correction.
+  - MTD does it in this order so that a publisher sending the wrong game's ID can neither make a correction animate as a new result nor stop a new result from animating.
 - If `MTDColourSetting` does not parse, use the MTD UI's default colour.
 - On MQTT, a retained message is shown immediately, so a table that died within the last hour can appear for up to one timeout after MTD starts. Accepted for v1.
 

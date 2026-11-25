@@ -167,7 +167,7 @@ namespace MTD
         // How many results were put in front of the old list to make the new one, allowing for old results falling
         // off the end of a list that is at its size limit. The smallest such number, or 0 when the old list does not
         // reappear further down. The new list is never shorter than the old one here, and neither is empty.
-        static int CountAddedInFront(IReadOnlyList<string> oldKeys, IReadOnlyList<string> newKeys, bool allowNoOverlap)
+        internal static int CountAddedInFront(IReadOnlyList<string> oldKeys, IReadOnlyList<string> newKeys, bool allowNoOverlap)
         {
             for (int added = 1; added < newKeys.Count; added++)
             {

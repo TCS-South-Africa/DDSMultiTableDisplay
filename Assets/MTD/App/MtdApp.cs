@@ -101,6 +101,7 @@ namespace MTD
                 SlotSwapIntervalSeconds = config.switching.slotSwapIntervalSeconds,
             });
             rotation.SlotChanged += OnSlotChanged;
+            rotation.PagePresented += ui.Layout.pagePresented.Invoke;
 
             CreateTransport(config);
 
@@ -179,7 +180,11 @@ namespace MTD
             transport?.Dispose();
             transport = null;
 
-            if (rotation != null) rotation.SlotChanged -= OnSlotChanged;
+            if (rotation != null)
+            {
+                rotation.SlotChanged -= OnSlotChanged;
+                rotation.PagePresented -= ui.Layout.pagePresented.Invoke;
+            }
             rotation = null;
 
             if (display != null)

@@ -222,5 +222,82 @@ namespace MTD.Tests
             Assert.That(view.currentParts.All(p => p.localScale == Vector3.one));
             CollectionAssert.AreEqual(rest, view.historyRows.Select(r => r.anchoredPosition));
         }
+
+        [TestCase(4, "32")]
+        [TestCase(6, "0000")]
+        [TestCase(6, "4")]
+        public void OutgoingPocketAndChipMeetTheirHistoryArtExactly(int count, string pocket)
+        {
+            var board = MtdUiLoader.Load("Columns4K", MtdOrientation.Landscape, count, root.transform).Layout;
+            var old = TestSamples.Roulette(1, pocket, "0", "17");
+            old.Results[0].Multiplier = 100;
+            old.Results[0].MultiplierColour = "#CAAA36";
+            var widget = Object.Instantiate((ColumnsRouletteWidget)board.FindWidgetPrefab(SnapshotParser.Parse(old)), board.slots[1]);
+            var rect = (RectTransform)widget.transform;
+            rect.anchorMin = rect.offsetMin = Vector2.zero;
+            rect.anchorMax = Vector2.one;
+            rect.offsetMax = Vector2.zero;
+            widget.Bind(SnapshotParser.Parse(old), Color.blue);
+            var previousChipPosition = widget.currentChip.rim.transform.position;
+            old.Results.Insert(0, new MtdResultMessage {Result="14", Multiplier=80});
+            widget.Refresh(SnapshotParser.Parse(old), TableChange.NewResult, Color.blue);
+            Assert.That(widget.flying.ball.sprite.name, Is.EqualTo("Ball " + pocket));
+            Assert.That(widget.flying.chip.value.text, Is.EqualTo("100"));
+            Assert.That(Vector3.Distance(widget.flying.chip.rim.transform.position, previousChipPosition), Is.LessThan(.03f));
+            Assert.That(widget.currentChip.rim.gameObject.activeSelf, Is.False);
+            widget.column.Sample(.27f);
+            Assert.That(widget.flying.ball.color.a, Is.EqualTo(1));
+            widget.column.Sample(.60f);
+            var row = widget.rows[0];
+            Assert.That(row.ball.gameObject.activeSelf, Is.False);
+            Assert.That(row.chip.rim.color, Is.EqualTo(widget.flying.chip.rim.color));
+            Assert.That(Vector3.Distance(row.ball.transform.position, widget.flying.ball.transform.position), Is.LessThan(.03f));
+            Assert.That(Vector3.Distance(row.chip.rim.transform.position, widget.flying.chip.rim.transform.position), Is.LessThan(.03f));
+            widget.column.Sample(.94f);
+            Assert.That(row.ball.gameObject.activeSelf);
+            Assert.That(widget.flying.ball.gameObject.activeSelf, Is.False);
+            Assert.That(widget.currentChip.value.text, Is.EqualTo("80"));
+        }
+
+        [Test]
+        public void TransferTracksOlderWinnerPastRepeatedAndUnreadableSpinsAndCancelsOnCorrection()
+        {
+            var table = TestSamples.RouletteSnapshot(1, "4","17");
+            var widget = (ColumnsRouletteWidget)Object.Instantiate(layout.FindWidgetPrefab(table), root.transform);
+            widget.Bind(table, Color.blue);
+            widget.Refresh(TestSamples.RouletteSnapshot(1,"4","4","17"), TableChange.NewResult, Color.blue);
+            widget.Refresh(TestSamples.RouletteSnapshot(1,"3","bad","4","4","17"), TableChange.NewResult, Color.blue);
+            widget.column.Sample(.55f);
+            Assert.That(widget.rows[0].ball.gameObject.activeSelf);
+            Assert.That(widget.rows[1].ball.gameObject.activeSelf, Is.False);
+            Assert.That(widget.flying.ball.sprite.name, Is.EqualTo("Ball 4"));
+            widget.Refresh(TestSamples.RouletteSnapshot(1,"bad","35"), TableChange.Corrected, Color.blue);
+            Assert.That(widget.flying.ball.gameObject.activeSelf, Is.False);
+            Assert.That(widget.rows[1].ball.gameObject.activeSelf, Is.False);
+            widget.Refresh(TestSamples.RouletteSnapshot(1,"14","bad","35"), TableChange.NewResult, Color.blue);
+            Assert.That(widget.flying.ball.gameObject.activeSelf, Is.False);
+        }
+
+        [TestCase(4)]
+        [TestCase(6)]
+        public void RelayAlignsToTheSeamAndBothEngravingsSitBehindTheWinner(int count)
+        {
+            var board = MtdUiLoader.Load("Columns4K", MtdOrientation.Landscape, count, root.transform).Layout;
+            var relay = board.GetComponentInChildren<DiamondRelay>();
+            Assert.That(board.pagePresented.GetPersistentTarget(0), Is.SameAs(relay));
+            Assert.That(relay.slots, Is.EqualTo(count));
+            Assert.That(relay.seam.rectTransform.anchoredPosition.y, Is.EqualTo(-365.5f));
+            relay.Play();
+            Assert.That(relay.seam.enabled);
+            relay.Sample(2.25f);
+            Assert.That(relay.seam.enabled, Is.False);
+            foreach (var item in board.widgets)
+            {
+                var view = item.prefab.GetComponent<ColumnView>();
+                Assert.That(view.backplate.texture.name, Is.EqualTo(item.family == GameFamily.Roulette ? "Wheel Engraving" : "Dice Engraving"));
+                Assert.That(view.backplate.rectTransform.GetSiblingIndex(), Is.LessThan(view.current.GetSiblingIndex()));
+                Assert.That(view.backplate.rectTransform.rect.width, Is.EqualTo(352));
+            }
+        }
     }
 }

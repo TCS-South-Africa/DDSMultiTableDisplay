@@ -63,6 +63,27 @@ namespace MTD.Tests
             AssertShown(controller, 0, 0, 0, 0, 0, 0);
         }
 
+        [TestCase(SwitchingMode.Pages)]
+        [TestCase(SwitchingMode.SlotBySlot)]
+        public void PresentationIsRaisedAfterFirstAssignmentsAndOnlyOnDifferentWholePages(SwitchingMode mode)
+        {
+            var rotation = Create(mode, 4);
+            var pages = new List<int[]>();
+            rotation.PagePresented += () => pages.Add(Shown(rotation));
+            rotation.SetEligible(Tables(), 0);
+            rotation.SetEligible(Tables(1), 1);
+            rotation.SetEligible(Range(1, 4), 2);
+            rotation.Tick(1 + settle);
+            rotation.Tick(1 + settle + dwell);
+            Assert.That(pages.Count, Is.EqualTo(1));
+            CollectionAssert.AreEqual(new[] { 1,0,0,0 }, pages[0]);
+            rotation.SetEligible(Range(1, 7), 2 + settle + dwell);
+            rotation.Tick(1 + settle + 2*dwell);
+            Assert.That(pages.Count, Is.EqualTo(mode == SwitchingMode.Pages ? 2 : 1));
+            if (mode == SwitchingMode.Pages)
+                CollectionAssert.AreEqual(new[] { 5,6,7,0 }, pages[1]);
+        }
+
         [Test]
         public void WhileSettling_SlotsFollowTheListAsTablesReportIn()
         {

@@ -43,6 +43,12 @@ namespace MTD
         public Sprite[] pockets, balls; // 0..36 followed by 00, 000 and 0000.
         public HistoryRow[] rows;
         public HistoryRow tail;
+        public HistoryRow flying;
+
+        RouletteSnapshot displayed;
+        int landing = -1;
+        bool rowHidden;
+        Vector3 source, chipSource, entry;
 
         protected override void OnColour(Color colour) => column.Tint(colour);
         public override IEnumerator PlayEnter() => column.Fade(true);
@@ -50,6 +56,7 @@ namespace MTD
 
         protected override void OnBind(RouletteSnapshot table)
         {
+            column.Roulette = this;
             tail.ball.sprite = null;
             tail.chip.Draw(null);
             column.Header(table, table.Variant);
@@ -61,10 +68,13 @@ namespace MTD
             column.Header(table, table.Variant);
             column.Refresh(change, table.Current.HasValue && !table.CurrentResultUnreadable,
                 () => DrawCurrent(table), i => DrawRow(table, i), CopyTail);
+            if (change == TableChange.NewResult && table.Current.HasValue && !table.CurrentResultUnreadable)
+                PrepareTransfer(table);
         }
 
         void DrawCurrent(RouletteSnapshot table)
         {
+            displayed = table;
             RouletteResult? current = table.CurrentResultUnreadable ? null : table.Current;
             column.CurrentState(current.HasValue, table.CurrentResultUnreadable);
             currentPocket.enabled = current.HasValue;
@@ -85,9 +95,90 @@ namespace MTD
             }
             RouletteResult result = table.History[i];
             row.ball.sprite = balls[Index(result.Pocket)];
-            float lane = result.Pocket.IsZero ? .5f : result.Pocket.Colour == RouletteColour.Red ? .18f : .82f;
-            row.ball.rectTransform.anchorMin = row.ball.rectTransform.anchorMax = new Vector2(lane, 1);
+            row.ball.rectTransform.anchorMin = row.ball.rectTransform.anchorMax = new Vector2(Lane(result.Pocket), 1);
             row.chip.Draw(result);
+        }
+
+        static float Lane(RoulettePocket pocket) =>
+            pocket.IsZero ? .5f : pocket.Colour == RouletteColour.Red ? .18f : .82f;
+
+        void PrepareTransfer(RouletteSnapshot next)
+        {
+            EndTransfer();
+            if (displayed?.Current == null || displayed.CurrentResultUnreadable || displayed.TableId != next.TableId) return;
+
+            // Match the whole overlapping DDS sequence, including coloured chips and unreadable
+            // rows. A repeated pocket alone cannot identify the spin which just left the hero.
+            int added = TableRegistry.CountAddedInFront(displayed.ResultKeys, next.ResultKeys, false);
+            if (added == 0) return;
+            int target = 0;
+            for (int i = 1; i < added; i++)
+                if (!next.ResultKeys[i].StartsWith("?", StringComparison.Ordinal)) target++;
+            if (target >= rows.Length || target >= next.History.Count) return;
+
+            var old = displayed.Current.Value;
+            landing = target;
+            flying.ball.sprite = balls[Index(old.Pocket)];
+            flying.chip.Draw(old);
+            source = transform.InverseTransformPoint(currentPocket.rectTransform.position);
+            chipSource = transform.InverseTransformPoint(currentChip.rim.rectTransform.position);
+            // Until the scroll starts, the destination band still displays the preceding snapshot.
+            var band = column.historyRows[target];
+            var centre = new Vector2(Mathf.Lerp(band.rect.xMin, band.rect.xMax, Lane(old.Pocket)), band.rect.center.y);
+            entry = transform.InverseTransformPoint(band.TransformPoint(centre + Vector2.up * ColumnView.RoulettePitch));
+            flying.ball.gameObject.SetActive(true);
+            currentChip.rim.gameObject.SetActive(false);
+            SampleTransfer(0, false);
+        }
+
+        internal void SampleTransfer(float t, bool rowsCommitted)
+        {
+            if (landing < 0) return;
+            var destination = rows[landing].ball.rectTransform;
+            if (rowsCommitted && !rowHidden)
+            {
+                destination.gameObject.SetActive(false);
+                rowHidden = true;
+            }
+            if (t >= .94f)
+            {
+                EndTransfer();
+                return;
+            }
+
+            float phase = Mathf.Clamp01(t / .44f);
+            float blend = Mathf.SmoothStep(0, 1, phase);
+            Vector3 position = rowsCommitted ? transform.InverseTransformPoint(destination.position) : entry;
+            if (!rowsCommitted)
+            {
+                position.x = Mathf.Lerp(source.x, entry.x, Mathf.Sin(phase * Mathf.PI * .5f));
+                position.y = Mathf.Lerp(source.y, entry.y, phase * phase) + 40 * Mathf.Sin(phase * Mathf.PI);
+            }
+            var ball = flying.ball.rectTransform;
+            ball.position = transform.TransformPoint(position);
+            float scale = Mathf.Lerp(.45f, 1, blend);
+            ball.localScale = Vector3.one * scale;
+            flying.ball.color = new Color(1, 1, 1, Mathf.SmoothStep(0, 1, phase * 3.5f));
+
+            // The chip departs at its actual hero size, joins the ball on the arc and arrives
+            // at the precise inset of the history chip. The destination inherits both at once.
+            var chip = flying.chip.rim.rectTransform;
+            var restChip = rows[landing].chip.rim.rectTransform;
+            chip.localPosition = restChip.localPosition;
+            Vector3 attached = transform.InverseTransformPoint(chip.position);
+            chip.position = transform.TransformPoint(Vector3.Lerp(chipSource, attached, blend));
+            float initialScale = currentChip.rim.rectTransform.rect.width / restChip.rect.width;
+            chip.localScale = Vector3.one * (Mathf.Lerp(initialScale, 1, blend) / scale);
+        }
+
+        internal void EndTransfer()
+        {
+            if (rowHidden) rows[landing].ball.gameObject.SetActive(true);
+            rowHidden = false;
+            landing = -1;
+            flying.ball.gameObject.SetActive(false);
+            flying.ball.sprite = null;
+            flying.chip.Draw(null);
         }
 
         void CopyTail()

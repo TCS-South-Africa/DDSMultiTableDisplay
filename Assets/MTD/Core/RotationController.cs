@@ -63,6 +63,8 @@ namespace MTD
         }
 
         public event Action<int, Guid?> SlotChanged;
+        // After all assignments for the first visible board or a different timed page are published.
+        public event Action PagePresented;
 
         public IReadOnlyList<Guid?> Slots => slots;
 
@@ -80,7 +82,8 @@ namespace MTD
                 return;
             }
 
-            if (phase == Phase.Idle)
+            bool firstPage = phase == Phase.Idle;
+            if (firstPage)
             {
                 phase = Phase.Settling;
                 phaseEndsAt = now + settings.SettleSeconds;
@@ -89,6 +92,7 @@ namespace MTD
             if (phase == Phase.Settling)
             {
                 ShowInOrder(0);
+                if (firstPage) PagePresented?.Invoke();
                 return;
             }
 
@@ -174,9 +178,10 @@ namespace MTD
             int start = nextPageStart;
             if (eligible.Count <= slots.Length || start >= eligible.Count) start = 0;
 
-            ShowInOrder(start);
+            bool changed = ShowInOrder(start);
             RememberPage(start);
             phaseEndsAt = now + settings.DwellSeconds;
+            if (changed) PagePresented?.Invoke();
         }
 
         void RememberPage(int start)
@@ -243,13 +248,17 @@ namespace MTD
         }
 
         // Slot i shows the table at start + i, or nothing when the list runs out.
-        void ShowInOrder(int start)
+        bool ShowInOrder(int start)
         {
+            bool changed = false;
             for (int slot = 0; slot < slots.Length; slot++)
             {
                 int index = start + slot;
-                SetSlot(slot, index < eligible.Count ? eligible[index] : (Guid?)null);
+                Guid? table = index < eligible.Count ? eligible[index] : (Guid?)null;
+                changed |= slots[slot] != table;
+                SetSlot(slot, table);
             }
+            return changed;
         }
 
         void SetSlot(int slot, Guid? table)

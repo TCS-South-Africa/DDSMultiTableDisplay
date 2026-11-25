@@ -484,7 +484,7 @@ The gold titles, paired variant logos and dice come from the approved artwork. T
 
 ### Reference motion and typography
 
-Roulette follows `Mock up MTD  1.mp4`. The current pocket and multiplier shrink about their own centres. History moves down one spin with a one-frame delay between rows at the film’s 30 fps. The incoming multiplier plays the isolated winning sparks. The first ball is centred 90 design pixels into its rounded lane. Each ball is 112 pixels across on a 125-pixel pitch, leaving a 13-pixel gap at rest. The scroll limits peak speed so consecutive results in the same lane also stay separated in motion.
+Roulette follows `Mock up MTD  1.mp4`. The current pocket shrinks as its history ball and multiplier enter the lane. History moves down one spin with a one-frame delay between rows at the film’s 30 fps. The incoming multiplier plays the isolated winning sparks. The first ball is centred 90 design pixels into its rounded lane. Each ball is 112 pixels across on a 125-pixel pitch, leaving a 13-pixel gap at rest. The scroll limits peak speed so consecutive results in the same lane also stay separated in motion.
 
 Sic Bo follows `Mock up MTD  2.mp4`. The three current dice, total and outcome shrink and return four film frames apart. Each history row slides right, changes its value beyond the local history mask and returns from that same edge at the same height. The next row begins five frames later. The distance follows the width of the owning column in both landscape layouts.
 
@@ -499,3 +499,15 @@ All 231 editor tests passed, including same-lane clearance throughout a Roulette
 Frame tracking over 366 native-resolution frames in each landscape layout showed the two border highlights advancing continuously through the corners. In the 1080p recording, the shine reached the centres of the six titles in order at 0.73, 1.47, 2.20, 2.97, 3.70 and 4.43 seconds. Both variant particle fields showed upward motion in every sampled interval.
 
 At 1080×1920 the app loaded the six-slot landscape fallback. The Windows build succeeded with zero errors and 509 warnings from the Unity inference package shaders. It includes the Prompt license in its StreamingAssets folder. The release player started the twelve-table demo, responded and exited with code 0. The local DDS configuration still has `useTConnect2` disabled. A live publisher result, correction and limit change remain to be checked on a provisioned table.
+
+### Diamond relay, winner-to-history and engraved backplates
+
+The first occupied board and each changed full page send two gold highlights out from the centre of the header seam. Each diamond and its adjacent frame corners catch the light as it passes. In the 30 fps Game view recording, the centre diamond peaked three frames after the page turn. The inner pair peaked at frame 15 and the outer pair at frame 25. In four-slot Demo Mode the board played the relay once on arrival while the staggered swaps continued independently. [Game view recording of both pages and the Roulette handoff](Screenshots/Columns-Relay-and-Handoff.mp4)
+
+The outgoing Roulette pocket becomes a numbered history ball. Its multiplier moves from the large result to the rim of that same ball. The widget matches the overlapping DDS result sequence to find the landing row when several spins arrive together. A correction immediately redraws the affected results. The recording shows a black 4 carrying its gold 100 chip into the right lane as a red 14 arrives with its purple 80 chip.
+
+A cropped wheel engraving sits behind each Roulette winner and three engraved dice sit behind Sic Bo. Their cut edges stay at the same physical scale in both landscape layouts. A soft light moves across them in slot order on a 10.4-second cycle. [Six columns at 4K](Screenshots/Columns-3840x2160.png) · [Six columns at 1080p](Screenshots/Columns-1920x1080.png) · [Four columns at 1080p](Screenshots/Columns-Four-1920x1080.png)
+
+All 239 editor tests passed. A 20-second run at 3840×2160 on the RTX 5070 Laptop GPU delivered nine double updates per table across six visible slots. Over 5,526 frames, the median interval was 3.26 ms, p95 was 5.68 ms, and the longest frame took 22.87 ms. GPU p95 was 4.29 ms. The displayed current and previous spin matched the two latest deliveries, followed by the corrected `0000` and updated formatted limits.
+
+The twelve-table, six-slot demo presented three boards in sequence, tables 1–6, then 7–12, then 1–6 again. The rebuilt Windows release started the saved twelve-table demo, responded and exited with code 0. The build reported zero errors and 509 shader warnings from Unity's inference package. The local DDS configuration still has T-Connect disabled, so live publisher verification remains open.

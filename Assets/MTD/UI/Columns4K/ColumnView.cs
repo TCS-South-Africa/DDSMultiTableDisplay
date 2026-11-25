@@ -21,9 +21,10 @@ namespace MTD
         public Sprite powerReel, xtra;
         public RectTransform current, history;
         public CanvasGroup surface;
-        public RawImage headerLight, chipBurst;
+        public RawImage headerLight, chipBurst, backplate;
         public RectTransform[] currentParts, historyRows;
         public RectTransform rouletteTail;
+        internal ColumnsRouletteWidget Roulette { private get; set; }
 
         Vector2[] rest;
         float started;
@@ -37,6 +38,8 @@ namespace MTD
         {
             colour.a = 1;
             headerTint.color = bodyTint.color = colour;
+            Color metal = softenHistoryTint ? new Color32(146,207,220,255) : new Color32(227,169,105,255);
+            backplate.color = Color.Lerp(metal, colour, .18f);
             Color field = Color.Lerp(colour, Color.white, softenHistoryTint ? .36f : .48f);
             field.a = softenHistoryTint ? .095f : .15f;
             foreach (Image background in historyFields) background.color = field;
@@ -60,6 +63,7 @@ namespace MTD
             var layout = GetComponentInParent<MtdLayout>();
             int slot = layout != null ? Array.IndexOf(layout.slots, transform.parent as RectTransform) : 0;
             headerLight.uvRect = new Rect(2 * style, (slot % 2) * 2, 1, 1);
+            backplate.uvRect = new Rect(0, 2 * Mathf.Max(0, slot), 1, 1);
         }
 
         static void SetLabelInsets(RectTransform label, float inset)
@@ -141,7 +145,11 @@ namespace MTD
             }
 
             if (Sliding) SlideDiceRows(t);
-            else ScrollSpins(t);
+            else
+            {
+                ScrollSpins(t);
+                Roulette?.SampleTransfer(t, rowsChanged > 0);
+            }
 
             if (t >= (Sliding ? 3.55f : 2.5f)) ResetMotion();
         }
@@ -223,6 +231,7 @@ namespace MTD
 
         void ResetMotion()
         {
+            Roulette?.EndTransfer();
             drawCurrent = null;
             drawRow = null;
             copyTail = null;

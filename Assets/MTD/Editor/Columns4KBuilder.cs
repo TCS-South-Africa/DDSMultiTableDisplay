@@ -247,6 +247,13 @@ namespace MTD.Editor
             view.surface = root.gameObject.AddComponent<CanvasGroup>();
             view.headerTint = Panel(root, "Header", 18, 342);
             view.bodyTint = Panel(root, "Body", 374, 1770);
+            // The engraving is cut at a fixed design size, so the wheel stays circular in four-slot mode.
+            var plate = Box(root, "Engraved backplate", 0, 403, 352, 290);
+            plate.anchoredPosition += Vector2.right * (11 + 176);
+            view.backplate = plate.gameObject.AddComponent<RawImage>();
+            view.backplate.raycastTarget = false;
+            view.backplate.material = MaterialAsset(ui + "/Art/Engraved Backplate.mat", "MTD/Columns/Engraved Backplate");
+            view.backplate.texture = Engraving(roulette ? "Wheel" : "Dice");
             Picture(root, roulette ? "Roulette Title" : "Sic Bo Title", .516f, 72, roulette ? 493 : 347, 103).material = artwork;
             var divider = Image(Span(root, "Divider", .12f, .88f, 176, 2));
             divider.color = gold;
@@ -302,6 +309,24 @@ namespace MTD.Editor
             return value;
         }
 
+        static Texture2D Engraving(string game)
+        {
+            string path = ui + "/Art/" + game + " Engraving.png";
+            var importer = (TextureImporter)AssetImporter.GetAtPath(path);
+            if (importer.sRGBTexture || importer.npotScale != TextureImporterNPOTScale.None ||
+                importer.wrapMode != TextureWrapMode.Clamp || importer.textureCompression != TextureImporterCompression.Uncompressed)
+            {
+                importer.sRGBTexture = false; // R and G hold the two edges of the cut.
+                importer.npotScale = TextureImporterNPOTScale.None;
+                importer.wrapMode = TextureWrapMode.Clamp;
+                importer.mipmapEnabled = true;
+                importer.filterMode = FilterMode.Trilinear;
+                importer.textureCompression = TextureImporterCompression.Uncompressed;
+                importer.SaveAndReimport();
+            }
+            return AssetDatabase.LoadAssetAtPath<Texture2D>(path);
+        }
+
         static ColumnsRouletteWidget.Chip Chip(RectTransform parent, float centre, float y, float size)
         {
             float tile = size * 1.18f; // The film chip has a soft shadow outside its printed diameter.
@@ -335,6 +360,9 @@ namespace MTD.Editor
                 if (i < widget.rows.Length) { widget.rows[i] = row; view.historyRows[i] = band; }
                 else { widget.tail = row; view.rouletteTail = band; band.gameObject.SetActive(false); }
             }
+            Image token = Image(Box(root, "Winner travelling to history", .5f, 0, 112, 112), preserve:true);
+            widget.flying = new ColumnsRouletteWidget.HistoryRow { ball = token, chip = Chip(token.rectTransform, .98f, 3, 51) };
+            token.gameObject.SetActive(false);
             return Save(root).GetComponent<ColumnsRouletteWidget>();
         }
 
@@ -426,6 +454,15 @@ namespace MTD.Editor
                 layout.slots[i] = slot;
                 if (i < count-1) Picture(board, "Diamond", (10+(i+1)*pitch)/3840, 343, 45, 45);
             }
+
+            var seam = Span(board, "Diamond relay", 0, 1, 321.5f, 88, 10);
+            var relay = seam.gameObject.AddComponent<DiamondRelay>();
+            relay.seam = seam.gameObject.AddComponent<RawImage>();
+            relay.seam.raycastTarget = false;
+            relay.seam.material = MaterialAsset(ui + "/Art/Diamond Relay.mat", "MTD/Columns/Diamond Relay");
+            relay.slots = count;
+            relay.seam.enabled = relay.enabled = false;
+            UnityEditor.Events.UnityEventTools.AddPersistentListener(layout.pagePresented, relay.Play);
 
             var panel = Span(board, "Display status", .12f, .88f, 866, 428);
             Image(panel).color = new Color(.015f,.019f,.025f,.97f);

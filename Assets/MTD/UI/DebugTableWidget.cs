@@ -46,8 +46,8 @@ namespace MTD
             if (text == null) return;
 
             StringBuilder builder = new StringBuilder(512);
-            builder.Append("<size=150%><b>").Append(table.TableName).Append(' ').Append(table.TableNumber).Append("</b></size>");
-            builder.Append("  <color=").Append(dim).Append(">MTD ").Append(table.MtdTableNumber).Append("</color>\n");
+            builder.Append("<size=150%><b><noparse>").Append(table.DisplayLabel(UseUniqueName).Replace("<", "<</noparse><noparse>"))
+                .Append("</noparse></b></size>\n");
             builder.Append(table.GameType).Append(table.TableOpen ? "" : "  <color=" + red + ">CLOSED</color>").Append('\n');
             builder.Append("MIN ").Append(table.MinBetText).Append("  MAX ").Append(table.MaxBetText).Append("\n\n");
 

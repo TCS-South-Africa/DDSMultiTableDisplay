@@ -20,6 +20,27 @@ namespace MTD.Tests
         [TearDown]
         public void TearDown() => Object.DestroyImmediate(root);
 
+        [Test]
+        public void BothColumnWidgetsCanUseATextAliasOrFallBackToTheOrdinaryLabel()
+        {
+            foreach (string game in new[] { "ROULETTE", "SICBO" })
+            {
+                var msg = TestSamples.Roulette(1);
+                msg.GameType = game;
+                msg.MTDTableUniqueName = "Salon 007";
+                var table = SnapshotParser.Parse(msg);
+                var widget = Object.Instantiate(layout.FindWidgetPrefab(table), root.transform);
+                widget.UseUniqueName = true;
+                widget.Bind(table, Color.white);
+                var view = widget.GetComponentInChildren<ColumnView>();
+                Assert.AreEqual("Salon 007", view.tableLabel.text);
+                Assert.AreEqual(view.tableLabel.text, view.reflection.text);
+                msg.MTDTableUniqueName = " ";
+                widget.Refresh(SnapshotParser.Parse(msg), TableChange.Updated, Color.white);
+                Assert.AreEqual("AR 01", view.tableLabel.text);
+            }
+        }
+
         [TestCase(4)]
         [TestCase(6)]
         public void CatalogResolvesBothLayoutsAndReportsPortraitFallback(int count)
@@ -44,7 +65,7 @@ namespace MTD.Tests
             var message = TestSamples.Roulette(27, "0000", "32", "00", "26", "000", "0");
             message.GameType = "ROULETTE_POWER";
             message.TableName = "West";
-            message.MTDTableNumber = "291";
+            message.MTDTableUniqueName = "291";
             message.MaxBetText = "10.000 €";
             message.Results[0].Multiplier = 50;
             message.Results[1].Multiplier = 100;
@@ -221,6 +242,44 @@ namespace MTD.Tests
             Assert.That(widget.currentChip.rim.gameObject.activeSelf, Is.False);
             Assert.That(view.currentParts.All(p => p.localScale == Vector3.one));
             CollectionAssert.AreEqual(rest, view.historyRows.Select(r => r.anchoredPosition));
+        }
+
+        [TestCase(4)]
+        [TestCase(6)]
+        public void LastRouletteBallAndChipFallCompletelyPastTheClip(int count)
+        {
+            var board = MtdUiLoader.Load("Columns4K", MtdOrientation.Landscape, count, root.transform).Layout;
+            var message = TestSamples.Roulette(1, "0","1","2","3","4","5","6","7","8","9","10","11");
+            message.Results[11].Multiplier = 100;
+            var table = SnapshotParser.Parse(message);
+            var widget = Object.Instantiate((ColumnsRouletteWidget)board.FindWidgetPrefab(table), board.slots[0]);
+            widget.Bind(table, Color.blue);
+            var view = widget.column;
+            var clip = view.history.GetComponentInParent<RectMask2D>().rectTransform;
+            float Edge(RectTransform rect, float y) => clip.InverseTransformPoint(rect.TransformPoint(new Vector2(0, y))).y;
+            var lane = view.historyFields[0].rectTransform;
+            Assert.That(Edge(lane, lane.rect.yMin) - Edge(view.bodyTint.rectTransform, view.bodyTint.rectTransform.rect.yMin),
+                Is.GreaterThanOrEqualTo(24));
+            message.Results.Insert(0, new MtdResultMessage { Result = "12" });
+            widget.Refresh(SnapshotParser.Parse(message), TableChange.NewResult, Color.blue);
+            var ball = widget.tail.ball.rectTransform;
+            var chip = widget.tail.chip.rim.rectTransform;
+            float bottom = clip.rect.yMin;
+            bool crossed = false, retired = false;
+            for (int frame = 54; frame <= 180; frame++)
+            {
+                view.Sample(frame / 120f);
+                float top = Mathf.Max(Edge(ball, ball.rect.yMax), Edge(chip, chip.rect.yMax));
+                if (!view.rouletteTail.gameObject.activeSelf)
+                {
+                    Assert.That(top, Is.LessThanOrEqualTo(bottom));
+                    retired = true;
+                    break;
+                }
+                crossed |= Edge(ball, ball.rect.yMin) < bottom && top > bottom;
+                Assert.That(widget.tail.chip.value.text, Is.EqualTo("100"));
+            }
+            Assert.That(crossed && retired, Is.True);
         }
 
         [TestCase(4, "32")]

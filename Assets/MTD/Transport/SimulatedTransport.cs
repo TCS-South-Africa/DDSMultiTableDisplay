@@ -62,6 +62,11 @@ namespace MTD
             }
         }
 
+        public IEnumerable<Guid> TableIds
+        {
+            get { foreach (TableSchedule schedule in tables) yield return schedule.Table.TableId; }
+        }
+
         public string Name => "Demo";
 
         public bool Connected => timer != null && !disposed;

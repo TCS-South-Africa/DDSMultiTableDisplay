@@ -7,7 +7,7 @@ namespace MTD
     // property names here must match it exactly.
     public class MtdTableSummaryMessage
     {
-        public const int CurrentSchemaVersion = 1;
+        public const int CurrentSchemaVersion = 2;
 
         public int SchemaVersion { get; set; }
         public Guid TableId { get; set; }
@@ -15,7 +15,7 @@ namespace MTD
         public string GameType { get; set; } // Kept as text so a game type MTD has never heard of still parses.
         public string TableName { get; set; }
         public int TableNumber { get; set; }
-        public string MTDTableNumber { get; set; }
+        public string MTDTableUniqueName { get; set; }
         public string MTDColourSetting { get; set; }
         public bool TableOpen { get; set; } = true;
         public long MinBet { get; set; }

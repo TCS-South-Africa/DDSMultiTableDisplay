@@ -1,11 +1,11 @@
 {
-  "SchemaVersion": 1,
+  "SchemaVersion": 2,
   "TableId": "11111111-0000-4000-8000-000000000004",
   "GameId": "aaaaaaaa-0000-4000-8000-000000000004",
   "GameType": "ROULETTE_POWER",
   "TableName": "AR",
   "TableNumber": 4,
-  "MTDTableNumber": "4",
+  "MTDTableUniqueName": "4",
   "MTDColourSetting": "#6A1B9A",
   "TableOpen": true,
   "MinBet": 1000,

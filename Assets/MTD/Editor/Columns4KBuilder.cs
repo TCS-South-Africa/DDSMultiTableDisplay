@@ -255,7 +255,7 @@ namespace MTD.Editor
             view.backplate.material = MaterialAsset(ui + "/Art/Engraved Backplate.mat", "MTD/Columns/Engraved Backplate");
             view.backplate.texture = Engraving(roulette ? "Wheel" : "Dice");
             Picture(root, roulette ? "Roulette Title" : "Sic Bo Title", .516f, 72, roulette ? 493 : 347, 103).material = artwork;
-            var divider = Image(Span(root, "Divider", .12f, .88f, 176, 2));
+            var divider = Image(Span(root, "Divider", .12f, .88f, 168, 2));
             divider.color = gold;
             divider.material = artwork;
             view.leftLogo = Image(Box(root, "Variant left", .15f, 184, 128, 112), preserve:true);
@@ -284,7 +284,7 @@ namespace MTD.Editor
             view.currentState = Text(Span(view.current, "Result status", 0, 1, 75, 125, 20), 43, gold);
             if (roulette)
                 view.historyFields = new[] { .18f, .5f, .82f }.Select(centre =>
-                    Image(Span(root, "Lane", centre-.144f, centre+.144f, 707, 1428), "Lane")).ToArray();
+                    Image(Span(root, "Lane", centre-.144f, centre+.144f, 707, 1408), "Lane")).ToArray();
             var mask = Span(root, "History window", 0, 1, 704, 1432, roulette ? 0 : 8);
             mask.gameObject.AddComponent<RectMask2D>();
             view.history = Span(mask, "History", 0, 1, 0, 1432);

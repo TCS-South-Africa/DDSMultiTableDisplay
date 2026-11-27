@@ -22,7 +22,7 @@ namespace MTD
         public GameFamily Family { get; internal set; }
         public string TableName { get; internal set; } = "";
         public int TableNumber { get; internal set; }
-        public string MtdTableNumber { get; internal set; } = "";
+        public string MtdTableUniqueName { get; internal set; } = "";
         public Color32? Colour { get; internal set; } // Null when DDS sent no colour or one that does not parse.
         public bool TableOpen { get; internal set; } = true;
         public long MinBet { get; internal set; }
@@ -38,6 +38,13 @@ namespace MTD
         public string UnreadableCurrentResult { get; internal set; }
 
         public bool CurrentResultUnreadable => UnreadableCurrentResult != null;
+
+        public string DisplayLabel(bool useUniqueName)
+        {
+            if (useUniqueName && !string.IsNullOrWhiteSpace(MtdTableUniqueName)) return MtdTableUniqueName;
+            string name = string.IsNullOrWhiteSpace(TableName) ? "TABLE" : TableName;
+            return name + " " + TableNumber.ToString("D2", CultureInfo.InvariantCulture);
+        }
 
         // One text key per result row DDS sent, newest first, whether or not MTD could read the row. The registry
         // compares these to tell a new result from a correction without knowing the game. A row MTD cannot read
@@ -70,7 +77,7 @@ namespace MTD
         {
             StringBuilder builder = new StringBuilder(256);
             builder.Append(GameType).Append('|').Append(TableName).Append('|').Append(TableNumber).Append('|')
-                .Append(MtdTableNumber).Append('|').Append(Colour.HasValue ? MtdColour.ToHex(Colour.Value) : "").Append('|')
+                .Append(MtdTableUniqueName).Append('|').Append(Colour.HasValue ? MtdColour.ToHex(Colour.Value) : "").Append('|')
                 .Append(TableOpen).Append('|').Append(MinBet).Append('|').Append(MaxBet).Append('|')
                 .Append(MinBetText).Append('|').Append(MaxBetText).Append('|');
             builder.Append(string.Join(",", ResultKeys)).Append('|');

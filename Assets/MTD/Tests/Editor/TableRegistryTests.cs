@@ -363,9 +363,9 @@ namespace MTD.Tests
             Assert.Greater(registry.MembershipVersion, version);
             version = registry.MembershipVersion;
 
-            message.MTDTableNumber = "42";
-            registry.Apply(SnapshotParser.Parse(message), 4);
-            Assert.Greater(registry.MembershipVersion, version);
+            message.MTDTableUniqueName = "Salon East";
+            Assert.AreEqual(TableChange.Updated, registry.Apply(SnapshotParser.Parse(message), 4));
+            Assert.AreEqual(version, registry.MembershipVersion);
         }
     }
 }

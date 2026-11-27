@@ -29,13 +29,13 @@ namespace MTD
 
         protected override void OnBind(SicBoSnapshot table)
         {
-            column.Header(table);
+            column.Header(table, UseUniqueName);
             column.Bind(() => DrawCurrent(table), i => DrawHistory(table, i));
         }
 
         protected override void OnRefresh(SicBoSnapshot table, TableChange change)
         {
-            column.Header(table);
+            column.Header(table, UseUniqueName);
             column.Refresh(change, table.Current.HasValue && !table.CurrentResultUnreadable,
                 () => DrawCurrent(table), i => DrawHistory(table, i));
         }

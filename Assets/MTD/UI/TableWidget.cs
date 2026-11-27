@@ -14,6 +14,8 @@ namespace MTD
     public abstract class TableWidget : MonoBehaviour
     {
         // The table this widget is showing. Null before the first Bind.
+        public bool UseUniqueName { get; internal set; }
+
         public TableSnapshot Table { get; private set; }
 
         // A different table now owns this widget. Draw it from scratch, with no animation.

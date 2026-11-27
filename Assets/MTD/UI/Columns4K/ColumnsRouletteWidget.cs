@@ -59,13 +59,13 @@ namespace MTD
             column.Roulette = this;
             tail.ball.sprite = null;
             tail.chip.Draw(null);
-            column.Header(table, table.Variant);
+            column.Header(table, UseUniqueName, table.Variant);
             column.Bind(() => DrawCurrent(table), i => DrawRow(table, i));
         }
 
         protected override void OnRefresh(RouletteSnapshot table, TableChange change)
         {
-            column.Header(table, table.Variant);
+            column.Header(table, UseUniqueName, table.Variant);
             column.Refresh(change, table.Current.HasValue && !table.CurrentResultUnreadable,
                 () => DrawCurrent(table), i => DrawRow(table, i), CopyTail);
             if (change == TableChange.NewResult && table.Current.HasValue && !table.CurrentResultUnreadable)

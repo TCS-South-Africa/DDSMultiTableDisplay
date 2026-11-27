@@ -1,11 +1,11 @@
 {
-  "SchemaVersion": 1,
+  "SchemaVersion": 2,
   "TableId": "11111111-0000-4000-8000-000000000001",
   "GameId": "aaaaaaaa-0000-4000-8000-000000000001",
   "GameType": "ROULETTE",
   "TableName": "AR",
   "TableNumber": 1,
-  "MTDTableNumber": "1",
+  "MTDTableUniqueName": "Salon 01",
   "MTDColourSetting": "#0B4F8A",
   "TableOpen": true,
   "MinBet": 1000,

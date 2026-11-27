@@ -111,10 +111,7 @@ namespace MTD
         static bool AffectsMembership(TableSnapshot previous, TableSnapshot current)
         {
             return previous.GameType != current.GameType
-                || previous.TableOpen != current.TableOpen
-                || previous.MtdTableNumber != current.MtdTableNumber
-                || previous.TableName != current.TableName
-                || previous.TableNumber != current.TableNumber;
+                || previous.TableOpen != current.TableOpen;
         }
 
         static TableChange Classify(TableSnapshot previous, TableSnapshot current)

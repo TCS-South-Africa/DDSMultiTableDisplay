@@ -8,6 +8,18 @@ namespace MTD.Tests
     public class SummaryParsingTests
     {
         [Test]
+        public void LegacyNumberOnAV1SummaryCannotIdentifyOrLabelTheTable()
+        {
+            Guid id = TestSamples.TableId(1);
+            string json = $"{{\"SchemaVersion\":1,\"TableId\":\"{id}\",\"GameType\":\"ROULETTE\",\"TableName\":\"AR\",\"TableNumber\":1,\"MTDTableNumber\":\"987\"}}";
+            var table = SummaryReader.Read(MtdTopics.TableSummary("test", id), TestSamples.Bytes(json), out _, out string error);
+            Assert.IsNull(error);
+            Assert.AreEqual(id, table.TableId);
+            Assert.IsEmpty(table.MtdTableUniqueName);
+            Assert.AreEqual("AR 01", table.DisplayLabel(true));
+        }
+
+        [Test]
         public void StandardRoulette_ParsesIdentityLimitsAndResults()
         {
             RouletteSnapshot snapshot = (RouletteSnapshot)TestSamples.ReadSnapshot("roulette-standard.json");
@@ -18,7 +30,7 @@ namespace MTD.Tests
             Assert.AreEqual(RouletteVariant.Standard, snapshot.Variant);
             Assert.AreEqual("AR", snapshot.TableName);
             Assert.AreEqual(1, snapshot.TableNumber);
-            Assert.AreEqual("1", snapshot.MtdTableNumber);
+            Assert.AreEqual("Salon 01", snapshot.MtdTableUniqueName);
             Assert.AreEqual(new Color32(0x0B, 0x4F, 0x8A, 255), snapshot.Colour.Value);
             Assert.IsTrue(snapshot.TableOpen);
             Assert.AreEqual(1000, snapshot.MinBet);

@@ -1,11 +1,11 @@
 {
-  "SchemaVersion": 1,
+  "SchemaVersion": 2,
   "TableId": "11111111-0000-4000-8000-000000000019",
   "GameId": "aaaaaaaa-0000-4000-8000-000000000019",
   "GameType": "SICBO",
   "TableName": "SB",
   "TableNumber": 19,
-  "MTDTableNumber": "19",
+  "MTDTableUniqueName": "19",
   "MTDColourSetting": "#0B6E8A",
   "TableOpen": true,
   "MinBet": 2000,

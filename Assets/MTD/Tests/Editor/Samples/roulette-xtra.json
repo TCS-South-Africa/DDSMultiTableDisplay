@@ -1,11 +1,11 @@
 {
-  "SchemaVersion": 1,
+  "SchemaVersion": 2,
   "TableId": "11111111-0000-4000-8000-000000000005",
   "GameId": "aaaaaaaa-0000-4000-8000-000000000005",
   "GameType": "ROULETTE_XTRA",
   "TableName": "AR",
   "TableNumber": 5,
-  "MTDTableNumber": "5",
+  "MTDTableUniqueName": "5",
   "MTDColourSetting": "#8A5A0B",
   "TableOpen": true,
   "MinBet": 1000,

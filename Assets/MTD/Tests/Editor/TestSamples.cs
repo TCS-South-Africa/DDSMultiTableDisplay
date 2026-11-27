@@ -40,13 +40,13 @@ namespace MTD.Tests
         {
             MtdTableSummaryMessage message = new MtdTableSummaryMessage
             {
-                SchemaVersion = 1,
+                SchemaVersion = MtdTableSummaryMessage.CurrentSchemaVersion,
                 TableId = TableId(tableNumber),
                 GameId = Guid.NewGuid(),
                 GameType = "ROULETTE",
                 TableName = "AR",
                 TableNumber = tableNumber,
-                MTDTableNumber = tableNumber.ToString(),
+                MTDTableUniqueName = tableNumber.ToString(),
                 MTDColourSetting = "#102030",
                 TableOpen = true,
                 MinBetText = "$10",

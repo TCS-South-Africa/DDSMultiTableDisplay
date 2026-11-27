@@ -1,6 +1,5 @@
 using System;
 using System.Collections;
-using System.Globalization;
 using TMPro;
 using UnityEngine;
 using UnityEngine.UI;
@@ -12,6 +11,9 @@ namespace MTD
         public const int HistoryLength = 11;
         public const float RowPitch = 130f;
         public const float RoulettePitch = 125f;
+        const float scrollTime = .50f, rampTime = .07f;
+        const float overshoot = 1.02f * RoulettePitch;
+        const float scrollSpeed = overshoot / (scrollTime - rampTime);
 
         public Image headerTint, bodyTint;
         public Image[] historyFields;
@@ -45,10 +47,11 @@ namespace MTD
             foreach (Image background in historyFields) background.color = field;
         }
 
-        public void Header(TableSnapshot table, RouletteVariant variant = RouletteVariant.Standard)
+        public void Header(TableSnapshot table, bool useUniqueName, RouletteVariant variant = RouletteVariant.Standard)
         {
-            string name = string.IsNullOrWhiteSpace(table.TableName) ? "TABLE" : table.TableName;
-            tableLabel.text = reflection.text = name + " " + table.TableNumber.ToString("D2", CultureInfo.InvariantCulture);
+            tableLabel.richText = reflection.richText = false;
+            tableLabel.parseCtrlCharacters = reflection.parseCtrlCharacters = false;
+            tableLabel.text = reflection.text = table.DisplayLabel(useUniqueName);
             minimum.text = table.MinBetText;
             maximum.text = table.MaxBetText;
             Sprite logo = variant == RouletteVariant.PowerReel ? powerReel : variant == RouletteVariant.Xtra ? xtra : null;
@@ -183,12 +186,15 @@ namespace MTD
             }
             for (int i = 0; i < historyRows.Length; i++)
             {
-                float p = SpinTravel(t - start - i / 30f);
-                historyRows[i].anchoredPosition = rest[i] + Vector2.up * (RoulettePitch * (1 - p));
+                float distance = SpinTravel(t - start - i / 30f);
+                historyRows[i].anchoredPosition = rest[i] + Vector2.up * (RoulettePitch - distance);
             }
             float tail = t - start - historyRows.Length / 30f;
-            rouletteTail.anchoredPosition = rest[rest.Length - 1] + Vector2.down * (RoulettePitch * SpinTravel(tail));
-            if (tail >= .60f) rouletteTail.gameObject.SetActive(false);
+            // The last spin keeps travelling through the bottom clip, including its multiplier.
+            // Its band encloses both sprites and is a direct child of the masked history area.
+            rouletteTail.anchoredPosition = rest[rest.Length - 1] + Vector2.down * DropDistance(tail);
+            if (rouletteTail.localPosition.y + rouletteTail.rect.yMax <= history.rect.yMin)
+                rouletteTail.gameObject.SetActive(false);
             float burst = (t - .94f) / 1.45f;
             chipBurst.enabled = burst >= 0 && burst < 1 && currentParts[1].gameObject.activeSelf;
             if (chipBurst.enabled) chipBurst.uvRect = new Rect(6 + 2 * Mathf.Min(43, (int)(burst * 44)), 0, 1, 1);
@@ -196,16 +202,20 @@ namespace MTD
 
         static float Ease(float p) => Mathf.SmoothStep(0, 1, Mathf.Clamp01(p));
 
-        // Bound the peak speed so two balls in the same lane stay visibly separated
-        // during the one-frame ripple, including the outgoing eleventh ball.
+        static float DropDistance(float elapsed)
+        {
+            float t = Mathf.Max(0, elapsed);
+            return scrollSpeed * (t < rampTime ? t*t/(2*rampTime) : t-rampTime*.5f);
+        }
+
+        // Retained spins brake and settle into their rows. The outgoing spin uses
+        // the same acceleration and cruising speed through the edge of the panel.
         static float SpinTravel(float elapsed)
         {
-            if (elapsed >= .50f) return Mathf.Lerp(1.02f, 1, Ease((elapsed - .50f) / .10f));
-            float t = Mathf.Clamp01(elapsed / .50f);
-            const float ramp = .14f;
-            float motion = t < ramp ? t*t/(2*ramp) : t > 1-ramp
-                ? 1-ramp - (1-t)*(1-t)/(2*ramp) : t-ramp*.5f;
-            return motion * (1.02f / (1-ramp));
+            if (elapsed >= scrollTime)
+                return Mathf.Lerp(overshoot, RoulettePitch, Ease((elapsed - scrollTime) / .10f));
+            if (elapsed > scrollTime - rampTime) return overshoot - DropDistance(scrollTime - elapsed);
+            return DropDistance(elapsed);
         }
 
         static float Arrive(float p)

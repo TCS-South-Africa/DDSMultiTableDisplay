@@ -3,6 +3,8 @@
     "rootNamespace": "MTD.Tests",
     "references": [
         "MTD",
+        "Unity.TextMeshPro",
+        "UnityEngine.UI",
         "UnityEngine.TestRunner",
         "UnityEditor.TestRunner"
     ],

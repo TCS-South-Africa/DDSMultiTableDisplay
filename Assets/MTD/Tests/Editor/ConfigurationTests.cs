@@ -40,7 +40,7 @@ namespace MTD.Tests
             Assert.IsFalse(data.display.demoMode);
             Assert.AreEqual(SwitchingMode.Pages, data.switching.mode);
             Assert.AreEqual(120, data.switching.dwellTimeSeconds);
-            Assert.AreEqual(5, data.switching.slotSwapIntervalSeconds);
+            CollectionAssert.AreEqual(new[] {120,120,120,120,120,120}, data.switching.slotIntervals);
             Assert.AreNotEqual(Guid.Empty, data.DeviceId);
             Assert.IsTrue(File.Exists(MainFile));
         }
@@ -69,8 +69,9 @@ namespace MTD.Tests
             data.tConnect.allowUntrustedCertificate = true;
             data.tConnect.useNats = false;
             data.tConnect.mtdName = "Pit 3 MTD";
-            data.tables.tableListSource = TableListSourceKind.Discover;
-            data.tables.mtdTableNumbers = "1-6, 19";
+            data.tables.tableListSource = TableListSourceKind.ManualEntry;
+            data.tables.manualTables.Add(new MtdConfigurationData.ManualTable { tableId = TestSamples.TableId(19).ToString("B"), slot = 6 });
+            data.display.useMtdTableUniqueName = true;
             data.tables.tableTimeoutSeconds = 60;
             data.tables.skipClosedTables = false;
             data.display.mtdUi = "columns-4k";
@@ -79,7 +80,7 @@ namespace MTD.Tests
             data.display.demoTables = 14;
             data.switching.mode = SwitchingMode.SlotBySlot;
             data.switching.dwellTimeSeconds = 90;
-            data.switching.slotSwapIntervalSeconds = 3;
+            data.switching.slotIntervals[1] = 3;
 
             MtdConfigurationStore.Save(data, folder);
             MtdConfigurationData loaded = MtdConfigurationStore.Load(out MtdConfigurationStore.LoadSource source, folder);
@@ -96,8 +97,10 @@ namespace MTD.Tests
             Assert.IsFalse(loaded.tConnect.useNats);
             Assert.AreEqual("Pit 3 MTD", loaded.tConnect.mtdName);
             Assert.AreEqual(data.DeviceId, loaded.DeviceId);
-            Assert.AreEqual(TableListSourceKind.Discover, loaded.tables.tableListSource);
-            Assert.AreEqual("1-6, 19", loaded.tables.mtdTableNumbers);
+            Assert.AreEqual(TableListSourceKind.ManualEntry, loaded.tables.tableListSource);
+            Assert.AreEqual(TestSamples.TableId(19).ToString(), loaded.tables.manualTables[0].tableId);
+            Assert.AreEqual(6, loaded.tables.manualTables[0].slot);
+            Assert.IsTrue(loaded.display.useMtdTableUniqueName);
             Assert.AreEqual(60, loaded.tables.tableTimeoutSeconds);
             Assert.IsFalse(loaded.tables.skipClosedTables);
             Assert.AreEqual("columns-4k", loaded.display.mtdUi);
@@ -106,7 +109,7 @@ namespace MTD.Tests
             Assert.AreEqual(14, loaded.display.demoTables);
             Assert.AreEqual(SwitchingMode.SlotBySlot, loaded.switching.mode);
             Assert.AreEqual(90, loaded.switching.dwellTimeSeconds);
-            Assert.AreEqual(3, loaded.switching.slotSwapIntervalSeconds);
+            Assert.AreEqual(3, loaded.switching.slotIntervals[1]);
         }
 
         [Test]
@@ -210,7 +213,7 @@ namespace MTD.Tests
             data.display.numberOfTables = 5;
             data.display.demoTables = 0;
             data.switching.dwellTimeSeconds = -3;
-            data.switching.slotSwapIntervalSeconds = 0;
+            data.switching.slotIntervals[1] = 0;
             data.switching.mode = (SwitchingMode)42;
 
             data.Normalise();
@@ -222,8 +225,41 @@ namespace MTD.Tests
             Assert.AreEqual(6, data.display.numberOfTables);
             Assert.AreEqual(1, data.display.demoTables);
             Assert.AreEqual(5, data.switching.dwellTimeSeconds);
-            Assert.AreEqual(1, data.switching.slotSwapIntervalSeconds);
+            Assert.AreEqual(5, data.switching.slotIntervals[1]);
             Assert.AreEqual(SwitchingMode.Pages, data.switching.mode);
+        }
+
+        [Test]
+        public void ManualEntryNormalisesGuidSpellingsAndPreservesOrderAndInactiveSlots()
+        {
+            var data = new MtdConfigurationData();
+            data.display.numberOfTables = 4;
+            var first = TestSamples.TableId(1);
+            var second = TestSamples.TableId(2);
+            var entries = data.tables.manualTables;
+            entries.Add(new MtdConfigurationData.ManualTable { tableId = second.ToString("B"), slot = 6 });
+            entries.Add(new MtdConfigurationData.ManualTable { tableId = "VIP" });
+            entries.Add(new MtdConfigurationData.ManualTable { tableId = first.ToString() });
+            entries.Add(new MtdConfigurationData.ManualTable { tableId = second.ToString(), slot = 1 });
+            data.Normalise();
+            Assert.AreEqual(2, entries.Count);
+            Assert.AreEqual(second.ToString(), entries[0].tableId);
+            Assert.AreEqual(5, entries[0].SlotIndex(0, 4));
+            Assert.AreEqual(1, entries[1].SlotIndex(1, 4));
+            var clone = data.Clone();
+            clone.tables.manualTables.RemoveAt(0);
+            Assert.AreEqual(2, entries.Count);
+        }
+
+        [Test]
+        public void OldDiscoverySettingsOpenAnEmptyManualList()
+        {
+            Directory.CreateDirectory(folder);
+            File.WriteAllText(MainFile, "{\"tables\":{\"tableListSource\":1,\"mtdTableNumbers\":\"1-6\"},\"switching\":{\"slotSwapIntervalSeconds\":3}}");
+            var loaded = MtdConfigurationStore.Load(out _, folder);
+            Assert.AreEqual(TableListSourceKind.ManualEntry, loaded.EffectiveTableListSource);
+            Assert.IsEmpty(loaded.tables.manualTables);
+            Assert.AreEqual(120, loaded.switching.slotIntervals[0]);
         }
 
         [Test]
@@ -241,7 +277,7 @@ namespace MTD.Tests
         }
 
         [Test]
-        public void MqttMode_AlwaysDiscoversTables()
+        public void MqttMode_UsesManualEntry()
         {
             MtdConfigurationData data = new MtdConfigurationData();
             data.tables.tableListSource = TableListSourceKind.TConnect;
@@ -251,7 +287,7 @@ namespace MTD.Tests
             Assert.AreEqual(4222, data.EffectivePort);
 
             data.tConnect.useNats = false;
-            Assert.AreEqual(TableListSourceKind.Discover, data.EffectiveTableListSource);
+            Assert.AreEqual(TableListSourceKind.ManualEntry, data.EffectiveTableListSource);
             Assert.AreEqual(1883, data.EffectivePort);
 
             data.tConnect.port = 8883;

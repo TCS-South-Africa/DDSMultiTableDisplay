@@ -1,6 +1,6 @@
 # DDS Multi-Table Display (MTD): implementation plan
 
-**Status:** Pass 1 is implemented (24 November 2026, branch `pass-1-backend`). Section 10 says what was built, what was checked and where it differs from this plan. Pass 2 has not started, and DDS does not publish the summary yet.
+**Status:** Pass 1 and the first Columns UI are implemented. The current roster, display naming and rotation rules were revised on 26 November 2026. Sections 10?12 record earlier verification on the versions tested at the time.
 
 MTD shows the results history of several DDS tables on one 16:9 screen. Each table gets a widget in a slot. The work runs in two passes, each in its own session:
 
@@ -13,12 +13,12 @@ Code references point at DDS (`C:\UnityProjects\DDS`) and the T-Connect server s
 
 ## 1. Decisions already made
 
-Answered by Garth on 24 November 2026:
+Decisions through 26 November 2026:
 
 | Question | Decision |
 | --- | --- |
-| Where does MTD get its list of tables? | From the T-Connect server. MTD registers as a device of type MTD and uses the server's per-display table list. Switching between tables stays a local MTD setting. The server's per-slot config (FIXED / ROTATION / MEDIA, overrides) is not used yet, with room left to add it. |
-| Which transports? | NATS and MQTT. The server's table list travels over NATS Key-Value, which MQTT cannot read, so in MQTT mode MTD discovers tables from the messages it receives. |
+| Where does MTD get its list of tables? | From T-Connect or Manual Entry. In server mode MTD registers as a device of type MTD and uses the server's per-display table list. Switching between tables stays a local MTD setting. The server's per-slot config (FIXED / ROTATION / MEDIA, overrides) is not used yet, with room left to add it. |
+| Which transports? | NATS and MQTT. The server's table list travels over NATS Key-Value, which MQTT cannot read, so in MQTT mode the operator enters table GUIDs manually. Manual Entry also works on NATS. |
 | Which concept is the first MTD UI? | The 3840x2160 six-column design (concept image 3). |
 
 From the original request:
@@ -27,7 +27,7 @@ From the original request:
 - 4 or 6 widgets. Landscape now, portrait likely. Widgets may be tall columns or cards depending on the MTD UI.
 - MTD UIs must be swappable from the Configuration Menu. No Addressables yet.
 - The Configuration Menu looks exactly like DDS's.
-- Two switching options: whole pages, or one slot at a time.
+- Two switching options: whole pages, or independent rotation within each slot.
 
 ## 2. What the evidence says
 
@@ -58,7 +58,7 @@ These findings shape the design. Each is from code, not assumption.
         └───────────────┬───────────────────────────┬───────────┘
                         │ main-thread queue         │
                         ▼                           ▼
-                 TableRegistry               ITableListSource
+                 TableRegistry               TableIdListSource
           (newest snapshot per table,     (T-Connect list │ discovery)
            freshness, change kind)                  │
                         └────────────┬──────────────┘
@@ -100,16 +100,16 @@ Adding Blackjack later means: a `BlackjackSnapshot` and parser, a widget prefab 
 
 ### 3.2 Which tables are shown
 
-`ITableListSource` answers "which table IDs may this display show?".
+`TableIdListSource` answers "which table IDs may this display show?".
 
 | Source | Used when | How |
 | --- | --- | --- |
-| `TConnectTableListSource` | NATS, table list source set to T-Connect (the default) | Registers with `provisioning.assign-device` (`DeviceType` `MTD`, the configured MTD name in `TableName`), retrying every 30 seconds as DDS does (DDS `TConnect2.cs:939-970`). The reply's `TableId` is the display ID. Then watches Key-Value bucket `mtd-table-list`, key `tcsjh.services.tconnect.display.{displayId}.table-list`, and reads `AvailableTableIds`. Pings `ping.ping-server` every 30 seconds so the server sees the display online (DDS `TConnect2.cs:1030-1067`). |
-| `DiscoveryTableListSource` | MQTT always; NATS when chosen | Every table that publishes a summary, optionally narrowed by a list of MTD table numbers typed in the menu (`1-6, 19`; blank means all). |
+| T-Connect | NATS, table list source set to T-Connect (the default) | Registers with `provisioning.assign-device` (`DeviceType` `MTD`, the configured MTD name in `TableName`), retrying every 30 seconds as DDS does (DDS `TConnect2.cs:939-970`). The reply's `TableId` is the display ID. Then watches Key-Value bucket `mtd-table-list`, key `tcsjh.services.tconnect.display.{displayId}.table-list`, and reads `AvailableTableIds`. Pings `ping.ping-server` every 30 seconds so the server sees the display online (DDS `TConnect2.cs:1030-1067`). |
+| Manual Entry | MQTT always, NATS when selected | The operator adds, edits or deletes DDS table GUIDs in the Tables tab. The list preserves entry order. An empty list shows no tables. |
 
-A table is **eligible** when it is in the source's list, has a fresh summary (heard within the timeout), belongs to a family the selected MTD UI has a widget for, and is open (unless "Skip Closed Tables" is off). Eligible tables are ordered by MTD table number (numerically when it parses), then table name, table number and ID.
+A table is **eligible** when it is in the source's list, has a fresh summary (heard within the timeout), belongs to a family the selected MTD UI has a widget for, and is open (unless "Skip Closed Tables" is off). Eligible tables follow the server or manual roster order. The label checkbox affects only widget text.
 
-MTD subscribes once to the wildcard subject and filters by the list. It does not subscribe per table.
+When upgrading a saved Discover configuration, enter the DDS GUIDs under Tables. Its numeric filter cannot be converted to GUIDs. Manual Entry needs a connection to the DDS results broker, but requires no T-Connect list service or display registration. It subscribes to the configured GUID subjects on the selected broker. Server mode watches the assignment list and filters the wildcard summary subscription.
 
 ### 3.3 Switching between tables
 
@@ -117,15 +117,11 @@ MTD subscribes once to the wildcard subject and filters by the list. It does not
 
 **Pages (option 1).** Tables are cut into pages of N (4 or 6). A page shows for the dwell time (default 120 seconds), then the next page shows, wrapping at the end. A short last page leaves its remaining slots empty. With N or fewer tables there is no paging.
 
-**Slot by slot (option 2).** The first N tables show for the dwell time. Then one slot at a time, slot 1 to slot N, takes the table that has waited longest off screen, and the table it replaces joins the back of the waiting queue. After slot N the display holds for the dwell time and the pass repeats. A table is never in two slots, and every table gets equal screen time. With N or fewer tables nothing swaps.
+**Slot by slot.** Each visible slot has its own interval (default 120 seconds) and cycles only through its assigned eligible tables. In Manual Entry the operator selects the slot for each ID. In T-Connect mode the full server list is distributed round-robin before checking freshness, so a quiet table does not move another ID between slots. An empty slot stays empty and a slot with one eligible ID stays on it.
 
-Two settings drive option 2: the dwell time and the **slot swap interval** between one slot's swap and the next. The interval defaults to 5 seconds, which reads as a staggered page turn. Setting it to the dwell time gives "one slot changes every two minutes" instead. See assumption A1.
+Page entries have automatic slot assignments based on entry position until the operator explicitly assigns them. In four-slot mode explicit assignments to slots five and six stay saved and inactive in slot mode. All entries participate in Pages. The manual summary shows the planned positions, while eligibility can shorten the live pages. [Manual table assignments in the Configuration Menu](Screenshots/Manual-Table-Assignments.png).
 
-Changes to the eligible list:
-
-- For the first 12 seconds after the first table appears (one heartbeat plus margin), slots simply follow the ordered list, so the first page settles as tables report in.
-- After that, a new table waits for the next switch, unless a slot is empty, in which case it fills it at once.
-- A table that stops being eligible leaves its slot immediately. In slot mode the slot is refilled from the waiting queue; in page mode it stays empty until the next page.
+Pages have a 12-second initial settling window while tables report. If a visible table becomes ineligible it vacates its slot immediately. In slot mode the next available member of that slot can fill it immediately.
 
 ### 3.4 MTD UIs
 
@@ -186,17 +182,18 @@ Because the widget prefabs hang off the layout, the same UI can use tall column 
 | `T-Connect\|Use NATS` | checkbox | on | Off means MQTT. |
 | `T-Connect\|MTD Name` | text | `MTD 01` | The name this display registers under. |
 | `T-Connect\|Device ID` | read-only | generated | See assumption A3. |
-| `Tables\|Table List Source` | dropdown | T-Connect | T-Connect or Discover. Forced to Discover in MQTT mode. |
-| `Tables\|MTD Table Numbers` | text | blank | Discover only. Ranges and commas; blank means all. |
+| `Tables\|Table List Source` | dropdown | T-Connect | T-Connect or Manual Entry on NATS. MQTT uses Manual Entry. |
+| `Tables\|Manual Tables` | editable list | empty | DDS table GUIDs, with slot assignment in Slot by Slot mode. |
 | `Tables\|Table Timeout (s)` | number | 35 | Not below 20: tables report every 10 seconds. |
 | `Tables\|Skip Closed Tables` | checkbox | on | |
 | `Display\|MTD UI` | dropdown | first in catalog | Lists the catalog. |
 | `Display\|Number Of Tables` | dropdown | 6 | 4 or 6. |
+| `Display\|Use MTD Table Unique Name` | checkbox | off | Show the alias from DDS. Blank aliases use the ordinary table label. |
 | `Display\|Demo Mode` | checkbox | off | Simulated tables, no broker. |
 | `Display\|Demo Tables` | number | 12 | Demo Mode only. How many tables are simulated. |
 | `Switching\|Mode` | dropdown | Pages | Pages or Slot By Slot. |
-| `Switching\|Dwell Time (s)` | number | 120 | |
-| `Switching\|Slot Swap Interval (s)` | number | 5 | Slot By Slot only. |
+| `Switching\|Page Dwell Time (s)` | number | 120 | |
+| `Switching\|Slot N Interval (s)` | number | 120 | Independent interval for each visible slot. |
 
 **TLS trust.** With TLS on, MTD goes on talking to a broker only if its certificate passes one of these, in `MtdTlsTrust`, which both transports use:
 
@@ -253,7 +250,7 @@ Each step lists what is built and how it is checked. Compile checks use `unity r
 | 1.3 Rotation | `RotationController` with page and slot-by-slot strategies and the list-change rules in 3.3. | Tests: 12, 14 and 5 tables with 6 and 4 slots; a full slot-by-slot pass; a table leaving and joining mid-dwell; the settle window. |
 | 1.4 Transports | `IMtdTransport` (start, subscribe, request, connection state, dispose). NATS adapted from DDS's `NatsTConnect2Transport` (first-connection retry, reconnect events, TLS), without its publish queue because MTD only subscribes and makes requests. MQTT adapted from `MqttManagerLite` (connect, reconnect, resubscribe). Simulated transport that emits contract JSON for a configurable set of fake tables. Subject builder for both forms. Main-thread queue that keeps only the newest pending message per table. | Tests: subject building. Demo Mode feeds the registry in play mode. Live: connect to a broker and receive a published sample (needs a broker, section 9). |
 | 1.5 T-Connect client | Device assignment, ping, and the Key-Value table list watch, NATS only. **Do the Key-Value watch first, as a spike.** The NATS client DLL contains the Key-Value API (checked by symbol search), but it has not been run under Unity's Mono. If it does not work, stop and report before building on it. | Live against a T-Connect server or a local JetStream-enabled `nats-server`: the display registers, a table list put into the bucket arrives, an update to it arrives. |
-| 1.6 Table list sources | Both sources, the MTD-number filter parser, eligibility and ordering. | Tests: filter parsing, eligibility rules, ordering including non-numeric MTD numbers. |
+| 1.6 Table list sources | Ordered server and manual GUID rosters, eligibility and ordering. | Tests: GUID membership, roster order and eligibility. |
 | 1.7 Configuration | `MtdConfiguration` data, defaults, load with fallback, save with backup. A device ID generated once and kept. | Tests: round trip, corrupt file falls back to the backup, missing file gives defaults. |
 | 1.8 UI framework | Catalog, definition, layout, `TableWidget` and typed bases, `MtdUiLoader`, `MtdDisplayController` (widget reuse per slot, colour, transitions), and the code-built debug UI. | Play mode in Demo Mode: the debug UI shows 6 then 4 slots filling and updating. |
 | 1.9 Application | `MtdApp` wires configuration, transport, registry, list source, rotation and display. Status model (connection, assignment state and code, tables listed, tables reporting) shown by the debug UI. Scene reload on apply; clean disposal. | Play mode in Demo Mode with 12 tables: page mode pages every dwell; slot mode swaps in order. Use a short dwell for the check. Enter and exit play mode twice without leaked connections or log errors. |
@@ -304,11 +301,9 @@ These were chosen from the evidence instead of asked. Each is cheap to change be
 
 | | Assumption | If wrong |
 | --- | --- | --- |
-| A1 | In slot-by-slot mode the slots swap 5 seconds apart, then everything holds for the dwell time. | It is a setting, so only the default changes. |
 | A2 | Closed tables are left out of the rotation by default. | Flip the default of "Skip Closed Tables". |
 | A3 | MTD's device ID is a GUID generated on first run and kept in the config file. DDS instead takes its ID from the licence hardware-ID tool. | If MTD must be licensed or identified the same way, step 1.7 calls that tool instead. |
 | A4 | A short last page shows empty slots instead of wrapping round to refill. | One rule in the page strategy. |
-| A5 | The summary's subject is `…/table/{TableId}/mtdsummary` and the MTD number field is named `MTDTableNumber`. | Rename in the contract before either side implements it. |
 | A6 | In MQTT mode MTD does not register with T-Connect at all. | Add assignment and ping over MQTT request/reply. |
 | A7 | The heartbeat is 10 seconds and the table timeout 35 seconds. | Change both numbers together. |
 | A8 | The Configuration Menu is one stretching panel with rows created in code, not a DDS-style prefab per orientation. | Author the prefabs instead; the script's binding changes. |
@@ -334,7 +329,7 @@ These were chosen from the evidence instead of asked. Each is cheap to change be
 
 - The design's source artwork, split into layers: column backgrounds in neutral tones, header card, red / black / green balls, multiplier chips, dice faces, the Power Reel and Roulette Xtra logos.
 - The fonts for the gold titles and the large result numerals, with licences that allow embedding.
-- What the header shows exactly: whether the table label is the table number or the MTD number, and where the table name (for example "SB") appears.
+- The header uses the Display tab label preference. An empty alias falls back to the ordinary DDS table label.
 - How triples look in the SicBo widget.
 - Whether a four-across version of this design is wanted, and any portrait design.
 
@@ -349,6 +344,14 @@ Built on 24 November 2026 on branch `pass-1-backend`, one commit per step. `main
 - `MTD > Setup` in the Editor's menu bar rebuilds the generated assets: the menu prefab, the scene, the build and player settings.
 - Edit-mode tests cannot be run with `unity test` while the Editor has the project open. Use `unity command test run --project-path . --mode editor`.
 - The live NATS tests are marked Explicit and need a local server first: `nats-server -js -p 14222`, then run the tests in category `Live`. NATS Server 2.15.3 and the NATS CLI 0.5.2 were installed with winget for this.
+
+### Windows installation
+
+Build the Windows x64 player to `Builds\Windows\MTD.exe`. On the display PC, run `.\Tools\Install-MtdPlayer.ps1` from the project root, or pass `-PlayerPath` with the path to a built player. The installer copies the player to `C:\tcs\mtd\application\`. The configuration and its backup stay in `C:\tcs\mtd\`.
+
+Launch `C:\tcs\mtd\application\MTD.exe` directly or use `Start MTD.lnk`. Both write Unity's native startup messages and application output to `C:\tcs\mtd\logs\Player.log` by default. To override the destination for one run, use `MTD.exe -logFile "D:\diagnostics\MTD.log"`. The display account needs write access to the log directory. [Unity Player command-line arguments](https://docs.unity3d.com/6000.6/Documentation/Manual/PlayerCommandLineArguments.html)
+
+When building the Windows x64 player on Windows, Unity applies the entry point from `Tools/WindowsPlayer` automatically and keeps the build's icon, version and manifest. After changing the native startup code or upgrading Unity, regenerate the template with `.\Tools\WindowsPlayer\Build-Template.ps1 -EditorDirectory "<Unity installation>\Editor"` using Zig 0.14.1.
 
 ### What was checked
 
@@ -459,3 +462,57 @@ One related case was seen and left alone, because it is a choice about what a di
 
 - **Connecting to the name `localhost` over NATS fails under Unity** when the server listens on IPv4 only. The name resolves to the IPv6 loopback address first and the client does not fall back to the IPv4 one. `127.0.0.1` works. DDS uses the same client.
 - **The password is stored in plain text** in `MtdConfig.json`, as it is in DDS.
+
+## 12. Pass 2 handoff — 25 November 2026
+
+**4K Columns** is selectable under **Display → MTD UI**. The catalog stores the ID `Columns4K`. The local Configuration Menu saved that ID and the app loaded it again on startup. This machine is configured for six slots and twelve demo tables. Debug remains selectable.
+
+The six- and four-slot landscape prefabs share the typed Roulette and Sic Bo widgets. Each slot has its own canvas. The supplied artwork is packed into two sprite sheets under `Assets/MTD/UI/Columns4K/Art`. The 40 current pockets and the 40 numbered history balls include all four zero labels. The table label uses the DDS name and patron-facing number. The amount fields display the DDS strings verbatim.
+
+The gold titles, paired variant logos and dice come from the approved artwork. The frame shading was separated from the supplied blue panels so each table can tint its own column. The multiplier rim, highlights and row masks were made for this UI. Small uses the red 小 sprite, big the blue 大 sprite, and triple the supplied green 圍 sprite. The visible glyphs determine the mapping because the two small/big source filenames are reversed. There is no outstanding branded placeholder.
+
+| Verification | Observed result |
+| --- | --- |
+| Demo Mode | Three standard Roulette tables, one Power Reel, one Xtra and one Sic Bo. The 11 earlier results fill their own chronological rows. |
+| Twelve tables | Six-slot pages switched from tables 1–6 to 7–12 and back. With four slots, one-second staggered swaps went from 1,2,3,4 through 5,2,3,4 and 5,6,3,4 to 5,6,7,8. |
+| Portrait | At 1080×1920 the loader selected the six-slot landscape fallback. The complete board was centered with black space above and below. |
+| Editor tests | 227 passed. Nine additional explicit NATS tests passed on two local brokers. |
+| Local broker and display | A stand-in returned assignment code 2749. Discovery showed waiting, then one occupied and five empty slots. The widget showed a new `000` with multiplier 100, retained its preceding spin, corrected the current pocket to `0000`, and displayed the changed maximum `100.000 EUR`. Closing and reopening the table removed and restored the widget. Stopping the broker showed connection loss while the table was still visible. |
+| Native 4K Game view | On the RTX 5070 Laptop GPU, a 20-second run delivered nine bursts with two updates per visible table per burst. The final result and first history row matched the last two deliveries. Across 5,875 rendered frames the median interval was 3.03 ms, p95 was 5.61 ms and p99 was 8.09 ms. One frame took 36.93 ms. GPU p95 was 4.32 ms across 5,628 timing samples. |
+| Windows release build | Unity 6000.6.10f1 built `Builds/Columns4K/MTD.exe` with zero errors and 509 shader-compiler warnings. The release player loaded the saved demo configuration and exited with code 0. A separate instrumented player rendered all six columns to a 3840×2160 texture for visual inspection. The hidden player window used 3840×1600. |
+
+**Game view captures** · [Six columns at 3840×2160](Screenshots/Columns-3840x2160.png) · [Six columns at 1920×1080](Screenshots/Columns-1920x1080.png) · [Four columns at 1920×1080](Screenshots/Columns-Four-1920x1080.png)
+
+**Live DDS check still open.** DDS now contains the summary publisher. The local DDS configuration had T-Connect disabled and no enrolled MTD table number. The end-to-end broker check used a test publisher. A provisioned table is still needed to confirm its own result, correction and formatted-limit messages.
+
+### Reference motion and typography
+
+Roulette follows `Mock up MTD  1.mp4`. The current pocket shrinks as its history ball and multiplier enter the lane. History moves down one spin with a one-frame delay between rows at the film’s 30 fps. The incoming multiplier plays the isolated winning sparks. The first ball is centred 90 design pixels into its rounded lane. Each ball is 112 pixels across on a 125-pixel pitch, leaving a 13-pixel gap at rest. The scroll limits peak speed so consecutive results in the same lane also stay separated in motion.
+
+At 3840×2160 the gold divider beneath each game title sits at y=168. The Roulette lane backgrounds end at y=2115, leaving a visible gap above the lower gold frame. The outgoing eleventh ball and its multiplier continue past the lanes and through the panel’s bottom clip at full scrolling speed. [Six-column Game view and four-column close-up](Screenshots/Columns-Roulette-History-Exit.mp4)
+
+Sic Bo follows `Mock up MTD  2.mp4`. The three current dice, total and outcome shrink and return four film frames apart. Each history row slides right, changes its value beyond the local history mask and returns from that same edge at the same height. The next row begins five frames later. The distance follows the width of the owning column in both landscape layouts.
+
+The titles, outcome glyphs and Roulette numerals use artwork. The Sic Bo glyphs have transparent cutouts and translucent black shadows. Table names, limits, chip values and Sic Bo totals use bundled Google Prompt fonts. The license is in `Assets/StreamingAssets/Licenses/Prompt-OFL.txt`. All patron-visible results, chip values, limits and table identifiers still come from the typed snapshot.
+
+Two highlights follow the rounded gold border at a constant speed in the six-column design. A separate diagonal shine crosses the gold lettering from the first slot to the last on a 6.1-second cycle. Gold Xtra particles and magenta Power Reel particles rise continuously at different speeds and drift sideways. The header close-up covers both variants at native 4K pixel density. [Header motion detail](Screenshots/Columns-Header-Detail.mp4)
+
+The motion recording puts Sic Bo in the third slot, between two Roulette tables. Across all 107 sampled frames of its transition at 1920×1080, the visible history area outside that panel matched the starting frame pixel for pixel. The recording then shows Xtra receiving a new multiplier. The demo includes a triple alongside small and big so all three outcome glyphs can be inspected. [Game view motion recording](Screenshots/Columns-Motion.mp4)
+
+All 231 editor tests passed, including same-lane clearance throughout a Roulette scroll, four- and six-slot Sic Bo clipping, and interruption by a correction or reassignment. Twelve-table Demo Mode switched full pages and staggered individual slots. Saving in the Configuration Menu and reloading from disk returned `Columns4K`. At 3840×2160 on the RTX 5070 Laptop GPU, a 20-second Game view run exercised nine double updates to all six slots. Across 5,218 frames, the median interval was 3.36 ms, p95 was 6.55 ms and the longest frame was 23.43 ms. GPU p95 was 4.86 ms. The last two delivered results, a subsequent correction and the changed formatted limits all appeared as expected.
+
+Frame tracking over 366 native-resolution frames in each landscape layout showed the two border highlights advancing continuously through the corners. In the 1080p recording, the shine reached the centres of the six titles in order at 0.73, 1.47, 2.20, 2.97, 3.70 and 4.43 seconds. Both variant particle fields showed upward motion in every sampled interval.
+
+At 1080×1920 the app loaded the six-slot landscape fallback. The Windows build succeeded with zero errors and 509 warnings from the Unity inference package shaders. It includes the Prompt license in its StreamingAssets folder. The release player started the twelve-table demo, responded and exited with code 0. The local DDS configuration still has `useTConnect2` disabled. A live publisher result, correction and limit change remain to be checked on a provisioned table.
+
+### Diamond relay, winner-to-history and engraved backplates
+
+The first occupied board and each changed full page send two gold highlights out from the centre of the header seam. Each diamond and its adjacent frame corners catch the light as it passes. In the 30 fps Game view recording, the centre diamond peaked three frames after the page turn. The inner pair peaked at frame 15 and the outer pair at frame 25. In four-slot Demo Mode the board played the relay once on arrival while the staggered swaps continued independently. [Game view recording of both pages and the Roulette handoff](Screenshots/Columns-Relay-and-Handoff.mp4)
+
+The outgoing Roulette pocket becomes a numbered history ball. Its multiplier moves from the large result to the rim of that same ball. The widget matches the overlapping DDS result sequence to find the landing row when several spins arrive together. A correction immediately redraws the affected results. The recording shows a black 4 carrying its gold 100 chip into the right lane as a red 14 arrives with its purple 80 chip.
+
+A cropped wheel engraving sits behind each Roulette winner and three engraved dice sit behind Sic Bo. Their cut edges stay at the same physical scale in both landscape layouts. A soft light moves across them in slot order on a 10.4-second cycle. [Six columns at 4K](Screenshots/Columns-3840x2160.png) · [Six columns at 1080p](Screenshots/Columns-1920x1080.png) · [Four columns at 1080p](Screenshots/Columns-Four-1920x1080.png)
+
+All 239 editor tests passed. A 20-second run at 3840×2160 on the RTX 5070 Laptop GPU delivered nine double updates per table across six visible slots. Over 5,526 frames, the median interval was 3.26 ms, p95 was 5.68 ms, and the longest frame took 22.87 ms. GPU p95 was 4.29 ms. The displayed current and previous spin matched the two latest deliveries, followed by the corrected `0000` and updated formatted limits.
+
+The twelve-table, six-slot demo presented three boards in sequence, tables 1–6, then 7–12, then 1–6 again. The rebuilt Windows release started the saved twelve-table demo, responded and exited with code 0. The build reported zero errors and 509 shader warnings from Unity's inference package. The local DDS configuration still has T-Connect disabled, so live publisher verification remains open.

@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using UnityEngine;
 
 namespace MTD
@@ -6,7 +7,7 @@ namespace MTD
     public enum TableListSourceKind
     {
         TConnect, // The T-Connect server's table list for this display. NATS only.
-        Discover, // Every table that publishes a summary, optionally narrowed by MTD table number.
+        ManualEntry = 1, // Former Discover configurations open with an empty manual list.
     }
 
     // Everything the Configuration Menu edits. Saved as C:\tcs\mtd\MtdConfig.json with JsonUtility, the way DDS
@@ -43,15 +44,25 @@ namespace MTD
         public class TableSettings
         {
             public TableListSourceKind tableListSource = TableListSourceKind.TConnect;
-            public string mtdTableNumbers = ""; // Discover only: "1-6, 19". Blank means every table.
+            public List<ManualTable> manualTables = new List<ManualTable>();
             public int tableTimeoutSeconds = 35;
             public bool skipClosedTables = true;
+        }
+
+        [Serializable]
+        public class ManualTable
+        {
+            public string tableId;
+            public int slot; // 1..6 when assigned. Page entries use 0 for automatic distribution in slot mode.
+
+            public int SlotIndex(int listIndex, int slotCount) => slot == 0 ? listIndex % slotCount : slot - 1;
         }
 
         [Serializable]
         public class DisplaySettings
         {
             public string mtdUi = ""; // An MTD UI id from the catalog. Blank means the first one.
+            public bool useMtdTableUniqueName;
             public int numberOfTables = 6;
             public bool demoMode;
             public int demoTables = 12;
@@ -62,11 +73,11 @@ namespace MTD
         {
             public SwitchingMode mode = SwitchingMode.Pages;
             public int dwellTimeSeconds = 120;
-            public int slotSwapIntervalSeconds = 5;
+            public int[] slotIntervals = { 120, 120, 120, 120, 120, 120 };
         }
 
         // The server's table list travels over NATS Key-Value, which MQTT cannot read.
-        public TableListSourceKind EffectiveTableListSource => tConnect.useNats ? tables.tableListSource : TableListSourceKind.Discover;
+        public TableListSourceKind EffectiveTableListSource => tConnect.useNats ? tables.tableListSource : TableListSourceKind.ManualEntry;
 
         public int EffectivePort => tConnect.port > 0 ? tConnect.port : (tConnect.useNats ? MtdTopics.DefaultNatsPort : MtdTopics.DefaultMqttPort);
 
@@ -88,7 +99,15 @@ namespace MTD
             tConnect.port = Mathf.Clamp(tConnect.port, 0, 65535);
             tConnect.mtdName = string.IsNullOrWhiteSpace(tConnect.mtdName) ? "MTD 01" : tConnect.mtdName.Trim();
 
-            tables.mtdTableNumbers = (tables.mtdTableNumbers ?? "").Trim();
+            tables.manualTables ??= new List<ManualTable>();
+            var seen = new HashSet<Guid>();
+            tables.manualTables.RemoveAll(entry =>
+            {
+                if (entry == null || !Guid.TryParse(entry.tableId, out Guid id) || id == Guid.Empty || !seen.Add(id)) return true;
+                entry.tableId = id.ToString();
+                entry.slot = Mathf.Clamp(entry.slot, 0, 6);
+                return false;
+            });
             tables.tableTimeoutSeconds = Mathf.Clamp(tables.tableTimeoutSeconds, MinTableTimeoutSeconds, 3600);
             if (!Enum.IsDefined(typeof(TableListSourceKind), tables.tableListSource)) tables.tableListSource = TableListSourceKind.TConnect;
 
@@ -98,7 +117,11 @@ namespace MTD
 
             if (!Enum.IsDefined(typeof(SwitchingMode), switching.mode)) switching.mode = SwitchingMode.Pages;
             switching.dwellTimeSeconds = Mathf.Clamp(switching.dwellTimeSeconds, 5, 86400);
-            switching.slotSwapIntervalSeconds = Mathf.Clamp(switching.slotSwapIntervalSeconds, 1, 86400);
+            int[] intervals = switching.slotIntervals;
+            Array.Resize(ref intervals, 6);
+            for (int i = 0; i < intervals.Length; i++)
+                intervals[i] = intervals[i] <= 0 ? switching.dwellTimeSeconds : Mathf.Clamp(intervals[i], 1, 86400);
+            switching.slotIntervals = intervals;
 
             if (DeviceId == Guid.Empty)
             {

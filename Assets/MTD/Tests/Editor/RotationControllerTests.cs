@@ -9,7 +9,6 @@ namespace MTD.Tests
     {
         const double settle = 12;
         const double dwell = 120;
-        const double interval = 5;
 
         static RotationController Create(SwitchingMode mode, int slots)
         {
@@ -18,7 +17,6 @@ namespace MTD.Tests
                 SlotCount = slots,
                 Mode = mode,
                 DwellSeconds = dwell,
-                SlotSwapIntervalSeconds = interval,
                 SettleSeconds = settle,
             });
         }
@@ -61,6 +59,27 @@ namespace MTD.Tests
             controller.Tick(1000);
 
             AssertShown(controller, 0, 0, 0, 0, 0, 0);
+        }
+
+        [TestCase(SwitchingMode.Pages)]
+        [TestCase(SwitchingMode.SlotBySlot)]
+        public void PresentationIsRaisedAfterFirstAssignmentsAndOnlyOnDifferentWholePages(SwitchingMode mode)
+        {
+            var rotation = Create(mode, 4);
+            var pages = new List<int[]>();
+            rotation.PagePresented += () => pages.Add(Shown(rotation));
+            rotation.SetEligible(Tables(), 0);
+            rotation.SetEligible(Tables(1), 1);
+            rotation.SetEligible(Range(1, 4), 2);
+            rotation.Tick(1 + settle);
+            rotation.Tick(1 + settle + dwell);
+            Assert.That(pages.Count, Is.EqualTo(1));
+            CollectionAssert.AreEqual(new[] { 1,0,0,0 }, pages[0]);
+            rotation.SetEligible(Range(1, 7), 2 + settle + dwell);
+            rotation.Tick(1 + settle + 2*dwell);
+            Assert.That(pages.Count, Is.EqualTo(mode == SwitchingMode.Pages ? 2 : 1));
+            if (mode == SwitchingMode.Pages)
+                CollectionAssert.AreEqual(new[] { 5,6,7,0 }, pages[1]);
         }
 
         [Test]
@@ -215,116 +234,39 @@ namespace MTD.Tests
         }
 
         [Test]
-        public void SlotBySlot_TwelveTables_SwapsOneSlotAtATimeThenHolds()
+        public void IndependentSlotsCycleOnlyAssignedIdsAtTheirOwnIntervals()
         {
-            RotationController controller = Settled(SwitchingMode.SlotBySlot, 6, Range(1, 12));
-            AssertShown(controller, 1, 2, 3, 4, 5, 6);
-
-            double passStart = settle + dwell;
-            controller.Tick(passStart - 0.1);
-            AssertShown(controller, 1, 2, 3, 4, 5, 6);
-
-            controller.Tick(passStart);
-            AssertShown(controller, 7, 2, 3, 4, 5, 6);
-
-            controller.Tick(passStart + interval - 0.1);
-            AssertShown(controller, 7, 2, 3, 4, 5, 6);
-
-            controller.Tick(passStart + interval);
-            AssertShown(controller, 7, 8, 3, 4, 5, 6);
-
-            for (int step = 2; step < 6; step++) controller.Tick(passStart + interval * step);
-            AssertShown(controller, 7, 8, 9, 10, 11, 12);
-
-            // Holds for a full dwell after the last slot, then the first six come back the same way.
-            double secondPass = passStart + interval * 5 + dwell;
-            controller.Tick(secondPass - 0.1);
-            AssertShown(controller, 7, 8, 9, 10, 11, 12);
-            controller.Tick(secondPass);
-            AssertShown(controller, 1, 8, 9, 10, 11, 12);
+            var controller = new RotationController(new RotationSettings {
+                Mode = SwitchingMode.SlotBySlot, SlotCount = 4, SlotIntervals = new[] { 5, 12, 20, 30 }
+            });
+            var ids = Range(1, 6);
+            int[] assignments = { 0, 0, 1, 1, 3, 5 };
+            int Slot(Guid id) => assignments[ids.IndexOf(id)];
+            controller.SetEligible(ids, 0, Slot);
+            AssertShown(controller, 1, 3, 0, 5);
+            controller.Tick(5);
+            AssertShown(controller, 2, 3, 0, 5);
+            controller.SetEligible(Tables(1, 2, 4, 5, 6), 6, Slot);
+            AssertShown(controller, 2, 4, 0, 5);
+            controller.SetEligible(ids, 7, Slot);
+            controller.Tick(12);
+            AssertShown(controller, 1, 4, 0, 5);
+            controller.Tick(18);
+            AssertShown(controller, 2, 3, 0, 5);
         }
 
         [Test]
-        public void SlotBySlot_EightTables_EveryTableKeepsTakingItsTurn()
+        public void QuietServerIdsStillOccupyTheirRosterPositions()
         {
-            RotationController controller = Settled(SwitchingMode.SlotBySlot, 6, Range(1, 8));
-
-            double passStart = settle + dwell;
-            for (int step = 0; step < 6; step++) controller.Tick(passStart + interval * step);
-
-            // 7 and 8 came in, then 1 to 4 came back round as they reached the front of the queue.
-            AssertShown(controller, 7, 8, 1, 2, 3, 4);
-        }
-
-        [Test]
-        public void SlotBySlot_FewerTablesThanSlots_NeverSwap()
-        {
-            RotationController controller = Settled(SwitchingMode.SlotBySlot, 6, Range(1, 6));
-            int changes = 0;
-            controller.SlotChanged += (slot, table) => changes++;
-
-            for (double time = settle; time < settle + dwell * 5; time += 1) controller.Tick(time);
-
-            AssertShown(controller, 1, 2, 3, 4, 5, 6);
-            Assert.AreEqual(0, changes);
-        }
-
-        [Test]
-        public void SlotBySlot_TableLeaving_IsReplacedFromTheQueueAtOnce()
-        {
-            RotationController controller = Settled(SwitchingMode.SlotBySlot, 6, Range(1, 9));
-
-            List<Guid> withoutThree = Range(1, 9);
-            withoutThree.Remove(TestSamples.TableId(3));
-            controller.SetEligible(withoutThree, 50);
-
-            AssertShown(controller, 1, 2, 7, 4, 5, 6);
-        }
-
-        [Test]
-        public void SlotBySlot_NewTable_JoinsTheBackOfTheQueue()
-        {
-            RotationController controller = Settled(SwitchingMode.SlotBySlot, 6, Range(1, 8));
-
-            controller.SetEligible(Range(1, 9), 50);
-            AssertShown(controller, 1, 2, 3, 4, 5, 6);
-
-            double passStart = settle + dwell;
-            for (int step = 0; step < 3; step++) controller.Tick(passStart + interval * step);
-            AssertShown(controller, 7, 8, 9, 4, 5, 6);
-        }
-
-        [Test]
-        public void SlotBySlot_NewTable_FillsAnEmptySlotAtOnce()
-        {
-            RotationController controller = Settled(SwitchingMode.SlotBySlot, 6, Range(1, 5));
-            AssertShown(controller, 1, 2, 3, 4, 5, 0);
-
-            controller.SetEligible(Range(1, 6), 50);
-
-            AssertShown(controller, 1, 2, 3, 4, 5, 6);
-        }
-
-        [Test]
-        public void SlotBySlot_NoTableIsEverInTwoSlots_AndScreenTimeIsShared()
-        {
-            RotationController controller = Settled(SwitchingMode.SlotBySlot, 6, Range(1, 9));
-            Dictionary<int, int> secondsOnScreen = Enumerable.Range(1, 9).ToDictionary(table => table, table => 0);
-
-            for (double time = settle; time < settle + 4 * 3600; time += 1)
-            {
-                controller.Tick(time);
-                int[] shown = Shown(controller);
-                Assert.AreEqual(6, shown.Distinct().Count(), $"A table is in two slots at {time}s.");
-                foreach (int table in shown) secondsOnScreen[table]++;
-            }
-
-            // Nine tables share six slots, so each should be up about two thirds of the time.
-            double average = secondsOnScreen.Values.Average();
-            foreach (KeyValuePair<int, int> entry in secondsOnScreen)
-            {
-                Assert.AreEqual(average, entry.Value, average * 0.05, $"Table {entry.Key} got an unfair share.");
-            }
+            var ids = Range(1, 9);
+            var controller = Create(SwitchingMode.SlotBySlot, 4);
+            int Slot(Guid id) => ids.IndexOf(id) % 4;
+            controller.SetEligible(Tables(2, 4, 5, 7, 9), 0, Slot);
+            AssertShown(controller, 5, 2, 7, 4);
+            controller.Tick(dwell);
+            AssertShown(controller, 9, 2, 7, 4);
+            controller.SetEligible(Tables(2, 4, 7), dwell + 1, Slot);
+            AssertShown(controller, 0, 2, 7, 4);
         }
 
         [Test]

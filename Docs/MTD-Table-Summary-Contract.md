@@ -1,6 +1,6 @@
-# MTD table summary: the DDS → MTD message (contract v1)
+# MTD table summary: the DDS → MTD message (contract v2)
 
-**Status:** proposed on 24 November 2026. MTD's side (the consumer) is implemented and has been run against a local NATS server with sample messages published by hand. DDS's side (the publisher) is not implemented, so no real table has sent this message yet.
+**Status:** Version 2, 26 November 2026. MTD consumes the display alias in v2 and accepts v1 summaries using the ordinary table label. The DDS publisher requires the v2 update below.
 
 DDS publishes one message per table that carries everything MTD needs to draw that table's widget. Every message is a complete snapshot. MTD therefore keeps no history of its own, and a display that starts late needs only one message per table to be correct.
 
@@ -8,11 +8,12 @@ Code references point at DDS (`C:\UnityProjects\DDS`) and at the T-Connect serve
 
 ## 1. Subject
 
-| Transport | DDS publishes to | MTD subscribes to |
+| Transport | DDS publishes to | Wildcard form |
 | --- | --- | --- |
 | MQTT | `tcsjh/{siteName}/table/{TableId}/mtdsummary` | `tcsjh/{siteName}/table/+/mtdsummary` |
 | NATS | `tcsjh.table.{TableId}.mtdsummary` | `tcsjh.table.*.mtdsummary` |
 
+- In Manual Entry mode MTD subscribes to the exact publish subject for each configured GUID. Only NATS supports the T-Connect roster.
 - DDS builds the MQTT form, as it does for every other message, and `TConnect2NatsSubjects.FromMqttTopic` turns it into the NATS form by dropping the site segment (DDS `Assets/External Communication/TConnect2Nats/TConnect2NatsSubjects.cs:22-45`). No change to the mapping is needed.
 - `siteName` is lower-cased and defaults to `testsite` when blank (DDS `TConnect2.cs:85-86`). MTD applies the same rule in MQTT mode.
 - The new subtopic does not collide with the server. The T-Connect server subscribes to each table subtopic by name (`tcsjh.table.*.gamestate`, `...info` and so on, snapshot `Server/TConnect.Server.TConnectService/TConnectWorker.cs:79-137`), not to `tcsjh.table.>`.
@@ -23,13 +24,13 @@ JSON, UTF-8, PascalCase property names, serialised with Newtonsoft like the othe
 
 | Field | JSON type | Meaning |
 | --- | --- | --- |
-| `SchemaVersion` | number | `1` for this document. |
+| `SchemaVersion` | number | `2` for this document. |
 | `TableId` | string (GUID) | The T-Connect table ID from device assignment. MTD's identity for the table. |
 | `GameId` | string (GUID) | The game that produced `Results[0]`. All zeros when `Results` is empty. See rule 5.3. |
 | `GameType` | string | A `GameTypesEnum` name: `ROULETTE`, `ROULETTE_XTRA`, `ROULETTE_POWER`, `SICBO`, `BLACKJACK` and so on. |
 | `TableName` | string | Table name without the number, for example `"SB"`. |
 | `TableNumber` | number | Table number, for example `19`. |
-| `MTDTableNumber` | string | The table's unique MTD number, for example `"19"`. Same value DDS sends in `info`. MTD orders tables by it. |
+| `MTDTableUniqueName` | string, optional | Display alias, for example `"Salon 019"`. Preserve text and leading zeros. Blank uses the ordinary table label. |
 | `MTDColourSetting` | string | Widget colour as `#RRGGBB`, for example `"#270470"`. |
 | `TableOpen` | boolean | Whether the table is open. |
 | `MinBet`, `MaxBet` | number | Current table limits in DDS's stored units (cents). |
@@ -48,26 +49,26 @@ A result object:
 | `Multiplier` | number, optional | The "something additional" for Roulette Xtra and Power Reel. Left out when there is none. |
 | `MultiplierColour` | string, optional | `#RRGGBB` chip colour DDS shows for that multiplier. An MTD UI may use it or ignore it. |
 
-How this maps to the requested list: items 1 to 13 are `TableId`, `GameId`, `GameType`, `TableName`, `TableNumber`, `MTDTableNumber`, `MTDColourSetting`, the four limit fields, `Results`, `HotNumbers`, `ColdNumbers`, `Statistics` and `EventTime`. Four things were added:
+How this maps to the requested list: items 1 to 13 are `TableId`, `GameId`, `GameType`, `TableName`, `TableNumber`, `MTDTableUniqueName`, `MTDColourSetting`, the four limit fields, `Results`, `HotNumbers`, `ColdNumbers`, `Statistics` and `EventTime`. Four things were added:
 
 - `SchemaVersion`, so the message can change later without guesswork.
 - `TableOpen`, so MTD can leave closed tables out of the rotation.
 - `MinBetText` and `MaxBetText`, so MTD shows exactly what the table shows. Currency symbol, symbol position and culture are per-table DDS settings (`currencyOverride`, `currencySymbolAfterAmount`), and DDS already has the formatter (`Utility.GetCurrencyString`, DDS `Assets/Scripts/Utility.cs:479`).
 - `MultiplierColour`, because DDS stores a chip colour with each Power Reel history entry (`RouletteXtra2HistoryResult.ChipColour`).
 
-`MTDTableNumber` is named after the field the T-Connect server already has on its table info message (`MTDTableNumber`, `MTDColourSetting`), so one DDS setting feeds both messages under one name. It is a string because the server's field is a string.
+The old v1 field `MTDTableNumber` is ignored by MTD. Only the provisioned `TableId` GUID identifies a table. Renaming a table or using the same display alias on two tables has no effect on selection, assignment or ordering.
 
 ### Example: Power Reel roulette
 
 ```json
 {
-  "SchemaVersion": 1,
+  "SchemaVersion": 2,
   "TableId": "5b0c7c0e-6f0a-4a57-9a53-3b1f0d1c2a11",
   "GameId": "0f6f2f8e-3d0b-4b7b-9a2e-7c1d5e8f9a01",
   "GameType": "ROULETTE_POWER",
   "TableName": "AR",
   "TableNumber": 4,
-  "MTDTableNumber": "4",
+  "MTDTableUniqueName": "West 04",
   "MTDColourSetting": "#6A1B9A",
   "TableOpen": true,
   "MinBet": 1000,
@@ -101,7 +102,7 @@ How this maps to the requested list: items 1 to 13 are `TableId`, `GameId`, `Gam
   "GameType": "SICBO",
   "TableName": "SB",
   "TableNumber": 19,
-  "MTDTableNumber": "19",
+  "MTDTableUniqueName": "Salon 019",
   "Results": [
     { "Result": "4-5-6" },
     { "Result": "1-2-6" },
@@ -172,14 +173,14 @@ MTD shows as many results and hot/cold numbers as the selected MTD UI has room f
 3. **`GameId` is the game that produced `Results[0]`.** DDS creates a new `GameState.currentGameID` on every move into Place Your Bets (DDS `Assets/Game State/GameState.cs:52-55`). A heartbeat sent during the next betting round must still carry the previous game's ID, so remember the ID when the result is recorded, the way `TriggerPlaceYourBets` already does for the game summary (`completedGameID`, DDS `EventController.cs:758`).
 4. **Live only.** Publish with `pStoreWhenDisconnected: false`, as the chipper alert does (DDS `TConnect2.cs:379-382`). The default path stores every message in SQLite and replays it after an outage (`TConnect2.cs:855-874`); replaying old snapshots is useless and delays real traffic.
 5. **Retained on MQTT.** Pass `pRetain: true`. NATS has no retained messages (DDS `NatsTConnect2Transport.cs:207`) and DDS's MQTT messages expire after an hour (`MqttTConnect2Transport.cs:31`), which is why the heartbeat is required on both transports.
-6. **Only when provisioned and enrolled.** Like every other T-Connect 2 message, nothing is sent until the table has a `TableId` (`TConnect2.cs:300`). A table with no MTD number set does not publish.
+6. **Publish when provisioned.** An empty or missing display alias must still publish whenever the DDS publisher is otherwise enabled and has a valid table GUID.
 7. **Do not depend on which statistics widgets are loaded.** `BaseStatistics.pocketsCount` is filled by statistics widgets, and a package may not have one. Count from `DataLogger.LatestWinningNumbers` directly.
 
 The heartbeat is also the liveness signal: MTD drops a table from the rotation when it has heard nothing for 35 seconds. That timeout is configurable on MTD, but not below 20 seconds, so the heartbeat must not be made slower than 10 seconds without changing MTD too.
 
 ## 6. Consumer rules (MTD)
 
-- Identity is `TableId`. `MTDTableNumber` is for ordering and for the server's records, not identity.
+- Match the topic and payload by `TableId`. Use the ordered T-Connect list on NATS or the manual GUID roster on either broker. The Display checkbox selects the alias or the ordinary DDS name and number (for example `AR 01`).
 - A table may only describe itself. MTD ignores a message whose `TableId` is not the table ID in the topic it arrived on, so nothing that can publish on one table's topic can change another table's widget.
 - Keep the newest message per table. Ignore a message whose `EventTime` is older than the one already held. Every message is compared this way, in the order it arrived; MTD does not assume the last one to arrive is the newest.
 - Ignore unknown fields. Treat a missing optional field as absent, never as an error.
@@ -198,8 +199,8 @@ This is a separate task in the DDS project. Nothing in the MTD passes edits DDS.
 
 | Work | Where |
 | --- | --- |
-| Two settings: `MTD\|Table Number` (integer, 0 = not on MTD) and `MTD\|Colour` | `Configuration.cs`, `ConfigurationMenu.cs` (three-step option workflow), both menu prefabs |
-| Add `MTDTableNumber` and `MTDColourSetting` to DDS's `TableInfoMessage` and fill them in `SendTableInfo` | `Messages/Tables/TableInfoMessage.cs`, `TConnect2.cs:298-312` |
+| Replace the old numeric option with `MTD\|Table Unique Name` (free text). Preserve `MTD\|Colour`. Migrate an existing positive number to its string and 0 to blank. | `Configuration.cs`, `ConfigurationMenu.cs` (three-step option workflow), both menu prefabs |
+| Keep the existing server `info` schema compatible. If its legacy `MTDTableNumber` string is required, map the display alias at that boundary only. | `Messages/Tables/TableInfoMessage.cs`, `TConnect2.cs:298-312` |
 | New `MtdTableSummaryMessage` DTO | `Messages/` |
 | Build and publish the summary (rules above) | `TConnect2.cs`, plus a small collector for results, hot/cold and statistics |
 | Edit-mode tests for the builder (result forms, markers excluded, multiplier rules) | `Assets/Scripts/Editor/` |
@@ -223,7 +224,7 @@ The T-Connect server snapshot already has an MTD model. This message supplies th
 
 | Piece | Detail | Reference in the snapshot |
 | --- | --- | --- |
-| Table info | The server's `TableInfoMessage` has optional `MTDTableNumber` and `MTDColourSetting`. When both are present it stores them on the table's MTD slot records. DDS's copy of the DTO does not have the two fields yet. | `Shared/.../Tables/TableInfoMessage.cs`, `Server/.../Handlers/TableInfoHandler.cs:35` |
+| Table info | The server's `TableInfoMessage` has optional `MTDTableNumber` and `MTDColourSetting`. When both are present it stores them on the table's MTD slot records. The server field name belongs to its separate info contract. | `Shared/.../Tables/TableInfoMessage.cs`, `Server/.../Handlers/TableInfoHandler.cs:35` |
 | MTD as a device | An MTD registers through `provisioning.assign-device` with `DeviceType` `MTD` and its name in `TableName`. The reply's `TableId` is the display ID. | `Server/TConnect.Server.Services/ProvisioningService.cs:124-240`, `Table/TConnect.Table.TestClient/MTDSim.cs` |
 | Table list | NATS Key-Value bucket `mtd-table-list`, key `tcsjh.services.tconnect.display.{displayId}.table-list`, value `{ DisplayId, AvailableTableIds }`. | `Server/TConnect.Server.Services/TableService.cs:509-520`, `Shared/.../TopicNameFactory.cs:87` |
 | Slot config and overrides | Buckets `mtd-slot-config` and `mtd-slot-override`, one key per slot: type FIXED / ROTATION / MEDIA, rotation interval, tables, media bucket, timed overrides. **Not used by MTD in the first build.** | `TableService.cs:483-507`, `Shared/.../Displays/MtdSlotInfoMessage.cs` |
@@ -233,11 +234,10 @@ The T-Connect server snapshot already has an MTD model. This message supplies th
 
 - Adding an optional field, a `Statistics` key or a `GameType` value does not change `SchemaVersion`.
 - Renaming or removing a field, or changing a field's meaning, raises it.
-- MTD accepts version 1. For a higher version it logs once and still reads the fields it knows.
+- Version 2 replaces the v1 number with the optional display-only alias. MTD accepts versions 1 and 2. For a higher version it logs once and still reads the fields it knows.
 
 ## 10. Open points
 
-1. **Two sources for the MTD number and colour.** DDS's settings send them to the server in `info`, and the server's web UI can also edit them and push them back in `mtdtableinfo`. This contract takes DDS's settings as the truth and MTD reads them from this message. If operators are meant to change them centrally, DDS needs an `mtdtableinfo` handler that updates its settings.
+1. **Settings ownership.** DDS supplies the alias and colour. The separate server table-list message contains the ordered GUIDs.
 2. **Power Reel variants reported as plain roulette.** `roulette-xtra-2-default` and `roulette-of-dreams-custom` behave as Power Reel but DDS reports them as `ROULETTE` (`TConnect2.cs:89-104`). Under this contract their results still carry multipliers, and MTD shows a multiplier chip whenever one is present, but the header would be branded as standard roulette. Decide on the DDS side whether they should report `ROULETTE_POWER`.
-3. **Field name.** The request called the field `MTDTableUniqueNumber`; this document uses the server's `MTDTableNumber`. Rename here if the longer name is preferred.
-4. **Broker checks not yet done.** That the T-Connect broker accepts the new subject from DDS and delivers it to an MTD login has been read from the snapshot's NATS config (one account, no subject restrictions), not observed.
+3. **Broker checks not yet done.** That the T-Connect broker accepts the new subject from DDS and delivers it to an MTD login has been read from the snapshot's NATS config (one account, no subject restrictions), not observed.

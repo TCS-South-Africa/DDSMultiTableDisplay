@@ -30,6 +30,7 @@ namespace MTD
         public GameObject emptySlotPrefab; // Optional. Shown in a slot that has no table.
         public Color defaultColour = new Color(0.16f, 0.18f, 0.24f); // For a table that sent no usable colour.
         public MtdStatusView statusView; // Optional. Where "connecting", "waiting for tables" and so on are shown.
+        public UnityEngine.Events.UnityEvent pagePresented = new UnityEngine.Events.UnityEvent();
 
         public int SlotCount => slots.Length;
 

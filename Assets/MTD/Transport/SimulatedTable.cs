@@ -105,7 +105,7 @@ namespace MTD
                 GameType = gameType,
                 TableName = TableName,
                 TableNumber = TableNumber,
-                MTDTableNumber = TableNumber.ToString(CultureInfo.InvariantCulture),
+                MTDTableUniqueName = "Demo " + TableNumber.ToString("D2", CultureInfo.InvariantCulture),
                 MTDColourSetting = Colour,
                 TableOpen = TableOpen,
                 MinBet = MinBet,

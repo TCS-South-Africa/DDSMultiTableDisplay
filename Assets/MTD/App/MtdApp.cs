@@ -21,7 +21,7 @@ namespace MTD
         IMtdTransport transport;
         TConnectMtdClient tConnectClient;
         TableRegistry registry;
-        ITableListSource tableListSource;
+        TableIdListSource tableListSource;
         TableIdListSource tConnectTableList;
         RotationController rotation;
         MtdDisplayController display;
@@ -91,16 +91,17 @@ namespace MTD
 
             registry = new TableRegistry(config.tables.tableTimeoutSeconds);
             display = gameObject.AddComponent<MtdDisplayController>();
-            display.Initialise(ui.Layout, tableId => registry.TryGet(tableId, out TableState state) ? state.Snapshot : null);
+            display.Initialise(ui.Layout, tableId => registry.TryGet(tableId, out TableState state) ? state.Snapshot : null, config.display.useMtdTableUniqueName);
 
             rotation = new RotationController(new RotationSettings
             {
                 SlotCount = ui.Layout.SlotCount,
                 Mode = config.switching.mode,
                 DwellSeconds = config.switching.dwellTimeSeconds,
-                SlotSwapIntervalSeconds = config.switching.slotSwapIntervalSeconds,
+                SlotIntervals = config.switching.slotIntervals,
             });
             rotation.SlotChanged += OnSlotChanged;
+            rotation.PagePresented += ui.Layout.pagePresented.Invoke;
 
             CreateTransport(config);
 
@@ -112,7 +113,12 @@ namespace MTD
 
             if (transport != null)
             {
-                transport.Subscribe(MtdTopics.TableSummaryFilter(config.tConnect.siteName), queue.PostMessage);
+                if (!config.display.demoMode && config.EffectiveTableListSource == TableListSourceKind.ManualEntry)
+                {
+                    foreach (var entry in config.tables.manualTables)
+                        transport.Subscribe(MtdTopics.TableSummary(config.tConnect.siteName, Guid.Parse(entry.tableId)), queue.PostMessage);
+                }
+                else transport.Subscribe(MtdTopics.TableSummaryFilter(config.tConnect.siteName), queue.PostMessage);
                 transport.Start();
                 tConnectClient?.Start();
             }
@@ -126,8 +132,10 @@ namespace MTD
 
             if (config.display.demoMode)
             {
-                transport = new SimulatedTransport(config.display.demoTables);
-                tableListSource = new DiscoveryTableListSource();
+                var simulation = new SimulatedTransport(config.display.demoTables);
+                transport = simulation;
+                tableListSource = new TableIdListSource("demo tables");
+                tableListSource.SetTables(simulation.TableIds);
                 return;
             }
 
@@ -139,7 +147,8 @@ namespace MTD
             }
             else
             {
-                tableListSource = new DiscoveryTableListSource(MtdNumberFilter.Parse(config.tables.mtdTableNumbers));
+                tableListSource = new TableIdListSource("manual table list");
+                tableListSource.SetTables(config.tables.manualTables.ConvertAll(entry => Guid.Parse(entry.tableId)));
             }
 
             if (!config.tConnect.connect || config.tConnect.url.Length == 0) return;
@@ -179,7 +188,11 @@ namespace MTD
             transport?.Dispose();
             transport = null;
 
-            if (rotation != null) rotation.SlotChanged -= OnSlotChanged;
+            if (rotation != null)
+            {
+                rotation.SlotChanged -= OnSlotChanged;
+                rotation.PagePresented -= ui.Layout.pagePresented.Invoke;
+            }
             rotation = null;
 
             if (display != null)
@@ -213,8 +226,10 @@ namespace MTD
                 seenSourceVersion = tableListSource.Version;
 
                 List<Guid> eligible = TableSelection.GetEligibleOrdered(registry.Tables, tableListSource, display.CanShow, Configuration.tables.skipClosedTables);
+                if (Configuration.switching.mode == SwitchingMode.SlotBySlot)
+                    eligible.RemoveAll(id => SlotFor(id) >= ui.Layout.SlotCount);
                 eligibleCount = eligible.Count;
-                rotation.SetEligible(eligible, now);
+                rotation.SetEligible(eligible, now, SlotFor);
             }
 
             rotation.Tick(now);
@@ -225,6 +240,15 @@ namespace MTD
                 UpdateStatus();
                 display.ShowStatus(new MtdStatus { Headline = status.Headline, Details = status.Details });
             }
+        }
+
+        int SlotFor(Guid id)
+        {
+            int index = tableListSource.Position(id);
+            int count = ui.Layout.SlotCount;
+            if (Configuration.display.demoMode || Configuration.EffectiveTableListSource == TableListSourceKind.TConnect)
+                return index % count;
+            return Configuration.tables.manualTables[index].SlotIndex(index, count);
         }
 
         // A table summary, now on the main thread.
@@ -312,7 +336,7 @@ namespace MTD
                 .Append("   |   reporting ").Append(registry.FreshCount)
                 .Append("   |   showable ").Append(eligibleCount)
                 .Append("   |   UI: ").Append(ui.DisplayName).Append(", ").Append(ui.Layout.SlotCount).Append(" slots, ")
-                .Append(config.switching.mode == SwitchingMode.Pages ? "pages" : "slot by slot").Append(" every ").Append(config.switching.dwellTimeSeconds).Append(" s")
+                .Append(config.switching.mode == SwitchingMode.Pages ? $"pages every {config.switching.dwellTimeSeconds} s" : "independent slot intervals")
                 .Append("   |   device ").Append(config.tConnect.deviceId);
 
             if (ui.Warning != null) details.Append('\n').Append(ui.Warning);
@@ -324,8 +348,6 @@ namespace MTD
         // The single most useful thing to tell someone looking at the screen, or nothing when tables are showing.
         string BuildHeadline(MtdConfigurationData config)
         {
-            if (eligibleCount > 0) return "";
-
             if (transport == null)
             {
                 return "Not connected. Press C to open the Configuration Menu.";
@@ -344,6 +366,8 @@ namespace MTD
                 return $"Connected to {transport.Name}, but {transportProblem}";
             }
 
+            if (eligibleCount > 0) return "";
+
             if (tConnectClient != null)
             {
                 switch (tConnectClient.State)
@@ -357,10 +381,13 @@ namespace MTD
                     case TConnectAssignmentState.NoReply:
                         return "Waiting for T-Connect: the server is not answering";
                     default:
-                        return $"Registering with T-Connect as \"{config.tConnect.mtdName}\"";
+                        return $"Registering with T-Connect as \"{config.tConnect.mtdName}\""
+                            + (string.IsNullOrEmpty(tConnectClient.AssignmentCode) ? "" : $"\nAssignment code {tConnectClient.AssignmentCode}");
                 }
             }
 
+            if (!config.display.demoMode && config.EffectiveTableListSource == TableListSourceKind.ManualEntry && tableListSource.Count == 0)
+                return "No manual table IDs. Press C and add a DDS table ID under Tables.";
             return "Waiting for tables";
         }
 

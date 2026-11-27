@@ -24,16 +24,18 @@ namespace MTD
         Slot[] slots = new Slot[0];
         Func<Guid, TableSnapshot> findLatest;
         MtdStatus shownStatus;
+        bool useUniqueName;
 
         public MtdLayout Layout => layout;
 
         public int SlotCount => slots.Length;
 
         // findLatest returns the newest snapshot for a table, or null when the table is no longer known.
-        public void Initialise(MtdLayout layoutInstance, Func<Guid, TableSnapshot> findLatest)
+        public void Initialise(MtdLayout layoutInstance, Func<Guid, TableSnapshot> findLatest, bool useUniqueName = false)
         {
             layout = layoutInstance;
             this.findLatest = findLatest;
+            this.useUniqueName = useUniqueName;
             shownStatus = null;
 
             slots = new Slot[layout.slots.Length];
@@ -138,6 +140,7 @@ namespace MTD
             {
                 widget = Instantiate(prefab, slot.Anchor, false);
                 widget.name = prefab.name;
+                widget.UseUniqueName = useUniqueName;
                 FillSlot((RectTransform)widget.transform);
                 slot.Instances[prefab] = widget;
             }

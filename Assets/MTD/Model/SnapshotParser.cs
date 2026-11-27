@@ -48,7 +48,7 @@ namespace MTD
             snapshot.Family = family;
             snapshot.TableName = (message.TableName ?? "").Trim();
             snapshot.TableNumber = message.TableNumber;
-            snapshot.MtdTableNumber = (message.MTDTableNumber ?? "").Trim();
+            snapshot.MtdTableUniqueName = (message.MTDTableUniqueName ?? "").Trim();
             snapshot.Colour = MtdColour.ParseOrNull(message.MTDColourSetting);
             snapshot.TableOpen = message.TableOpen;
             snapshot.MinBet = message.MinBet;

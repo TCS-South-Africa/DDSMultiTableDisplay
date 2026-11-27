@@ -1,11 +1,11 @@
 {
-  "SchemaVersion": 1,
+  "SchemaVersion": 2,
   "TableId": "11111111-0000-4000-8000-000000000030",
   "GameId": "aaaaaaaa-0000-4000-8000-000000000030",
   "GameType": "BLACKJACK",
   "TableName": "BJ",
   "TableNumber": 30,
-  "MTDTableNumber": "30",
+  "MTDTableUniqueName": "30",
   "MTDColourSetting": "#1B5E20",
   "TableOpen": true,
   "MinBet": 2500,

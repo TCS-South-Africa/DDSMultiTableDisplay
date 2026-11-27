@@ -20,7 +20,7 @@ namespace MTD
     //
     // C opens the menu. Controls edit a draft copy; Cancel throws it away, and Confirm & Save writes it and has
     // MtdApp rebuild everything from the new configuration.
-    public sealed class MtdConfigurationMenu : MonoBehaviour
+    public sealed partial class MtdConfigurationMenu : MonoBehaviour
     {
         static readonly Color tabSelectedColour = new Color(1f, 0.627f, 0.25f, 0f); // The same pair DDS uses.
         static readonly Color tabUnselectedColour = new Color(1f, 0.627f, 0.25f, 1f);
@@ -97,7 +97,7 @@ namespace MTD
         void DefineOptions()
         {
             const string tConnect = "T-Connect";
-            AddCheckbox(tConnect, "T-Connect|Connect", "Connect to the broker that the DDS tables publish to.",
+            AddCheckbox(tConnect, "T-Connect|Connect", "Connect to the DDS results broker. Manual Entry uses this connection without registering the display with T-Connect.",
                 c => c.tConnect.connect, (c, v) => c.tConnect.connect = v);
             AddText(tConnect, "T-Connect|URL", "The broker's host name or IP address.", "none",
                 c => c.tConnect.url, (c, v) => c.tConnect.url = v);
@@ -125,18 +125,17 @@ namespace MTD
                 isEnabled: c => false, shrinkToFit: true);
 
             const string tables = "Tables";
-            AddDropdown(tables, "Tables|Table List Source", "T-Connect: show the tables the T-Connect server lists for this display. Discover: show every table that reports in. MQTT always discovers.",
-                c => new List<Choice> { new Choice("T-Connect", TableListSourceKind.TConnect.ToString()), new Choice("Discover", TableListSourceKind.Discover.ToString()) },
+            AddDropdown(tables, "Tables|Table List Source", "T-Connect uses the server list on NATS. Manual Entry uses the DDS table IDs entered below, over NATS or MQTT.",
+                c => new List<Choice> { new Choice("T-Connect", TableListSourceKind.TConnect.ToString()), new Choice("Manual Entry", TableListSourceKind.ManualEntry.ToString()) },
                 c => c.EffectiveTableListSource.ToString(),
                 (c, v) => c.tables.tableListSource = (TableListSourceKind)Enum.Parse(typeof(TableListSourceKind), v),
                 isEnabled: c => c.tConnect.useNats);
-            AddText(tables, "Tables|MTD Table Numbers", "Discover only. The MTD table numbers to show, such as 1-6, 19. Leave blank to show every table.", "all",
-                c => c.tables.mtdTableNumbers, (c, v) => c.tables.mtdTableNumbers = v,
-                isEnabled: c => c.EffectiveTableListSource == TableListSourceKind.Discover);
             AddNumber(tables, "Tables|Table Timeout (s)", "A table that has sent nothing for this long is dropped until it reports again. Tables report every 10 seconds, so the least this can be is 20.", "35",
                 c => c.tables.tableTimeoutSeconds, (c, v) => c.tables.tableTimeoutSeconds = v);
             AddCheckbox(tables, "Tables|Skip Closed Tables", "Leave closed tables out of the rotation.",
                 c => c.tables.skipClosedTables, (c, v) => c.tables.skipClosedTables = v);
+
+            BuildManualEditor();
 
             const string displayTab = "Display";
             AddDropdown(displayTab, "Display|MTD UI", "The look of the display.",
@@ -147,6 +146,8 @@ namespace MTD
                 c => new List<Choice> { new Choice("4", "4"), new Choice("6", "6") },
                 c => c.display.numberOfTables.ToString(CultureInfo.InvariantCulture),
                 (c, v) => c.display.numberOfTables = int.Parse(v, CultureInfo.InvariantCulture));
+            AddCheckbox(displayTab, "Display|Use MTD Table Unique Name", "Show the DDS display alias. An empty alias uses the ordinary table name and number, for example AR 01.",
+                c => c.display.useMtdTableUniqueName, (c, v) => c.display.useMtdTableUniqueName = v);
             AddCheckbox(displayTab, "Display|Demo Mode", "Show simulated tables instead of connecting. Nothing on screen is real.",
                 c => c.display.demoMode, (c, v) => c.display.demoMode = v);
             AddNumber(displayTab, "Display|Demo Tables", "How many simulated tables Demo Mode runs.", "12",
@@ -154,15 +155,20 @@ namespace MTD
                 isEnabled: c => c.display.demoMode);
 
             const string switching = "Switching";
-            AddDropdown(switching, "Switching|Mode", "Pages: every table on screen changes together. Slot By Slot: one table changes at a time.",
+            AddDropdown(switching, "Switching|Mode", "Pages: every table on screen changes together. Slot By Slot: each slot cycles through its assigned tables on its own timer.",
                 c => new List<Choice> { new Choice("Pages", SwitchingMode.Pages.ToString()), new Choice("Slot By Slot", SwitchingMode.SlotBySlot.ToString()) },
                 c => c.switching.mode.ToString(),
                 (c, v) => c.switching.mode = (SwitchingMode)Enum.Parse(typeof(SwitchingMode), v));
-            AddNumber(switching, "Switching|Dwell Time (s)", "How long tables stay up before switching.", "120",
-                c => c.switching.dwellTimeSeconds, (c, v) => c.switching.dwellTimeSeconds = v);
-            AddNumber(switching, "Switching|Slot Swap Interval (s)", "Slot By Slot only. The gap between one slot changing and the next.", "5",
-                c => c.switching.slotSwapIntervalSeconds, (c, v) => c.switching.slotSwapIntervalSeconds = v,
-                isEnabled: c => c.switching.mode == SwitchingMode.SlotBySlot);
+            AddNumber(switching, "Switching|Page Dwell Time (s)", "How long each page stays on screen.", "120",
+                c => c.switching.dwellTimeSeconds, (c, v) => c.switching.dwellTimeSeconds = v,
+                isEnabled: c => c.switching.mode == SwitchingMode.Pages);
+            for (int i = 0; i < 6; i++)
+            {
+                int slot = i;
+                AddNumber(switching, $"Switching|Slot {i + 1} Interval (s)", "How long a table stays in this slot before the next assigned table appears.", "120",
+                    c => c.switching.slotIntervals[slot], (c, v) => c.switching.slotIntervals[slot] = Mathf.Clamp(v, 1, 86400),
+                    isEnabled: c => c.switching.mode == SwitchingMode.SlotBySlot && slot < c.display.numberOfTables);
+            }
         }
 
         // Every MTD UI in this build. Blank means "the first one", so that stays selectable as what it is; a UI
@@ -174,11 +180,10 @@ namespace MTD
 
             string current = configuration.display.mtdUi;
             bool currentIsInstalled = current.Length == 0;
+            choices.Add(new Choice($"Default ({installed[0].DisplayName})", ""));
             for (int i = 0; i < installed.Count; i++)
             {
-                // The first UI is what a blank setting loads, so it stands for the blank value while that is in use.
-                string value = i == 0 && current.Length == 0 ? "" : installed[i].Id;
-                choices.Add(new Choice(installed[i].DisplayName, value));
+                choices.Add(new Choice(installed[i].DisplayName, installed[i].Id));
                 if (string.Equals(installed[i].Id, current, StringComparison.OrdinalIgnoreCase)) currentIsInstalled = true;
             }
 
@@ -196,6 +201,7 @@ namespace MTD
 
             draft = app.Configuration.Clone();
             originalJson = JsonUtility.ToJson(draft);
+            ResetManualInput();
 
             // Authored for a 16:9 screen either way up, like DDS's two menu prefabs.
             canvasScaler.referenceResolution = Screen.height > Screen.width ? new Vector2(1080, 1920) : new Vector2(1920, 1080);
@@ -221,6 +227,7 @@ namespace MTD
 
         void OnConfirm()
         {
+            if (draft.EffectiveTableListSource == TableListSourceKind.ManualEntry && ManualInputPending() && !StoreManualInput()) return;
             MtdConfigurationData toSave = draft;
             bool changed = JsonUtility.ToJson(toSave) != originalJson;
             Close();
@@ -247,6 +254,7 @@ namespace MTD
                 option.Control.interactable = option.IsEnabled == null || option.IsEnabled(draft);
             }
 
+            RefreshManualEditor();
             isPopulating = false;
         }
 

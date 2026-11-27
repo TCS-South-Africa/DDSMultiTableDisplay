@@ -97,17 +97,19 @@ namespace MTD.Tests
             Run(() => broker.InjectApplicationMessage(new InjectedMqttApplicationMessage(message) { SenderClientId = "test-dds" }));
         }
 
-        [Test]
-        public void Summary_PublishedTheWayDdsWould_ReachesTheRegistry()
+        [TestCase(false)]
+        [TestCase(true)]
+        public void Summary_PublishedTheWayDdsWould_ReachesTheRegistry(bool manual)
         {
             MainThreadQueue queue = new MainThreadQueue();
-            transport.Subscribe(MtdTopics.TableSummaryFilter("Crown"), queue.PostMessage);
+            Guid tableId = TestSamples.ReadMessage("sicbo.json").TableId;
+            string topicFilter = manual ? MtdTopics.TableSummary("Crown", tableId) : MtdTopics.TableSummaryFilter("Crown");
+            transport.Subscribe(topicFilter, queue.PostMessage);
             transport.Start();
             Assert.IsTrue(WaitFor(() => transport.Connected, 5), $"Not connected: {transport.LastError}");
             Assert.IsNull(transport.LastError);
 
             byte[] payload = TestSamples.ReadBytes("sicbo.json");
-            Guid tableId = TestSamples.ReadMessage("sicbo.json").TableId;
             TableRegistry registry = new TableRegistry(35);
             int received = 0;
 
@@ -115,6 +117,7 @@ namespace MTD.Tests
             Assert.IsTrue(WaitFor(() =>
             {
                 Publish($"tcsjh/crown/table/{tableId}/mtdsummary", payload);
+                if (manual) Publish(MtdTopics.TableSummary("Crown", TestSamples.TableId(99)), payload);
                 Publish($"tcsjh/crown/table/{tableId}/gamesummary", payload); // A neighbouring topic MTD must not receive.
                 Publish($"tcsjh/othersite/table/{tableId}/mtdsummary", payload); // Another site's table.
                 Thread.Sleep(100);
